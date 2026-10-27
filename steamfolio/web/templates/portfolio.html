@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Портфолио · Портфолио Steam{% endblock %}
+{% block content %}
+<section class="summary" id="summary"></section>
+<div class="toolbar">
+  <button class="primary" id="btn-buy">Добавить закупленное</button>
+  <button id="btn-accounts">Аккаунты</button>
+  <label class="toggle"><input type="checkbox" id="opt-collapse"> Свернуть аккаунты</label>
+  <label class="toggle"><input type="checkbox" id="opt-closed"> Закрытые позиции</label>
+  <span class="spacer"></span>
+  <span class="muted small" id="rows-count"></span>
+</div>
+<div class="table-wrap" id="table"></div>
+{% endblock %}
+{% block scripts %}<script>SF.portfolioPage();</script>{% endblock %}

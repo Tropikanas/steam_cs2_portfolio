@@ -33,6 +33,7 @@ KIND_NAMES = {
     "buy_deleted": "покупка удалена",
     "sell_edited": "продажа изменена",
     "sell_deleted": "продажа удалена",
+    "transfer": "перенос на аккаунт",
 }
 # Поля исполнения ордера, которые можно изменить: предмет, валюта и аккаунт задаются ордером.
 FILL_EDITABLE_FIELDS = ("op_date", "quantity", "price", "fx_rate", "fx_source", "comment")
@@ -123,6 +124,19 @@ class Journal:
         rate, source = self._rate(currency, op_date, fx_rate)
         return self._add(Op(PENDING_ID, "sell", op_date, utcnow(), item, account_id, currency, quantity, price,
                             rate, source, comment=comment))
+
+    def transfer(
+        self, item: str, from_account_id: int, to_account_id: int, currency: Currency, quantity: int,
+        op_date: date | None = None, comment: str = "",
+    ) -> int:
+        """Перенести часть строки на другой аккаунт. Средняя цена и дата первой покупки переезжают вместе с предметами."""
+        op_date = op_date or today_msk()
+        self._check_trade(item, from_account_id, currency, quantity, 0, op_date)
+        self._check_account(to_account_id)
+        if to_account_id == from_account_id:
+            raise JournalError("аккаунты «откуда» и «куда» совпадают")
+        return self._add(Op(PENDING_ID, "transfer", op_date, utcnow(), item, from_account_id, currency, quantity,
+                            comment=comment, to_account_id=to_account_id))
 
     def edit(self, op_id: int, **changes) -> int:
         """Изменить покупку, продажу или исполнение ордера. Пишется отдельной операцией «было → стало»."""
@@ -245,14 +259,15 @@ class Journal:
         with self.conn:
             return self.conn.execute(
                 """INSERT INTO operations (portfolio_id, user_id, kind, op_date, created_at, market_hash_name,
-                       account_id, currency, quantity, price, fx_rate, fx_source, order_id, target_id, payload, comment)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       account_id, currency, quantity, price, fx_rate, fx_source, order_id, target_id, payload, comment,
+                       to_account_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     self.portfolio_id, self.user_id, op.kind, op.op_date.isoformat(), op.created_at,
                     op.market_hash_name, op.account_id, int(op.currency) if op.currency is not None else None,
                     op.quantity, op.price, str(op.fx_rate) if op.fx_rate is not None else None, op.fx_source,
                     op.order_id, op.target_id, json.dumps(op.payload, ensure_ascii=False) if op.payload else None,
-                    op.comment,
+                    op.comment, op.to_account_id,
                 ),
             ).lastrowid
 
@@ -297,14 +312,17 @@ class Journal:
             raise JournalError("не указан предмет")
         if currency not in USER_CURRENCIES:
             raise JournalError(f"валюта должна быть одной из: {', '.join(c.name for c in USER_CURRENCIES)}")
+        self._check_account(account_id)
+        if op_date > today_msk():
+            raise JournalError("дата операции в будущем")
+        self._check_amounts(quantity, price)
+
+    def _check_account(self, account_id: int | None) -> None:
         account = self.conn.execute(
             "SELECT 1 FROM accounts WHERE id = ? AND portfolio_id = ?", (account_id, self.portfolio_id)
         ).fetchone()
         if account is None:
             raise JournalError(f"аккаунт #{account_id} не найден")
-        if op_date > today_msk():
-            raise JournalError("дата операции в будущем")
-        self._check_amounts(quantity, price)
 
     @staticmethod
     def _check_amounts(quantity: int | None, price: int | None) -> None:

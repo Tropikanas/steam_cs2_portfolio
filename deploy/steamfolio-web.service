@@ -1,0 +1,21 @@
+[Unit]
+Description=Steam portfolio: web interface
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=steamfolio
+Group=steamfolio
+EnvironmentFile=/etc/steamfolio/steamfolio.env
+ExecStart=/opt/steamfolio/venv/bin/uvicorn --factory steamfolio.web:create_app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-server-header
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/steamfolio
+
+[Install]
+WantedBy=multi-user.target

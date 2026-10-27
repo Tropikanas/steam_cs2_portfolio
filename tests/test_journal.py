@@ -119,6 +119,58 @@ def test_manual_rate_is_kept(journal, acc):
     assert pos(journal, acc).cost_usd == 100
 
 
+# ---------- перенос между аккаунтами ----------
+
+def test_transfer_moves_quantity_with_average_and_first_date(journal, fx, acc, acc2):
+    fx.by_date[(RUB, D("2026-01-10"))] = Decimal(100)
+    journal.buy(CASE, acc, RUB, 100, 1000, D("2026-01-10"))  # 10 ₽ = $0.10 за штуку
+    journal.transfer(CASE, acc, acc2, RUB, 30, D("2026-02-01"))
+    src, dst = pos(journal, acc), pos(journal, acc2)
+    assert (src.quantity, src.avg_price, src.avg_price_usd) == (70, 1000, 10)
+    assert (dst.quantity, dst.avg_price, dst.avg_price_usd) == (30, 1000, 10)
+    assert dst.first_buy_date == D("2026-01-10")
+    ledger = journal.ledger()
+    assert ledger.invested_usd == 1000  # перенос не покупка
+    assert ledger.sales == []
+
+
+def test_transfer_into_existing_row_averages(journal, acc, acc2):
+    journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))
+    journal.buy(CASE, acc2, RUB, 10, 2000, D("2026-01-05"))
+    journal.transfer(CASE, acc, acc2, RUB, 10, D("2026-01-20"))
+    dst = pos(journal, acc2)
+    assert (dst.quantity, dst.avg_price, dst.first_buy_date) == (20, 1500, D("2026-01-05"))
+    assert pos(journal, acc).quantity == 0
+
+
+def test_sale_after_transfer_uses_carried_cost(journal, acc, acc2):
+    journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-01"))
+    journal.transfer(CASE, acc, acc2, RUB, 4, D("2026-01-02"))
+    journal.sell(CASE, acc2, RUB, 4, 1500, D("2026-04-01"))
+    sale = journal.ledger().sales[0]
+    assert sale.profit == 4 * 500
+    assert sale.months == Decimal("3.0")  # срок — от первой покупки на исходном аккаунте
+
+
+def test_transfer_validation_and_rollback(journal, acc, acc2):
+    journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
+    with pytest.raises(JournalError, match="при остатке 5"):
+        journal.transfer(CASE, acc, acc2, RUB, 6, D("2026-01-02"))
+    with pytest.raises(JournalError, match="совпадают"):
+        journal.transfer(CASE, acc, acc, RUB, 1, D("2026-01-02"))
+    with pytest.raises(JournalError):
+        journal.transfer(CASE, acc, 999, RUB, 1, D("2026-01-02"))
+    moved = journal.transfer(CASE, acc, acc2, RUB, 5, D("2026-01-02"))
+    sale = journal.sell(CASE, acc2, RUB, 2, 1500, D("2026-01-03"))
+    with pytest.raises(JournalError, match=f"#{sale}"):  # перенесённое уже продано
+        journal.cancel(moved)
+    journal.cancel(sale)
+    journal.cancel(moved)
+    assert (pos(journal, acc).quantity, pos(journal, acc2).quantity) == (5, 0)
+    with pytest.raises(JournalError, match="только покупки и продажи"):
+        journal.edit(moved, quantity=1)
+
+
 # ---------- ордера ----------
 
 def test_order_partial_then_full_fill(journal, acc):

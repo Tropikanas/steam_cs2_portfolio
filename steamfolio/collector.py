@@ -71,6 +71,32 @@ def run(conn: sqlite3.Connection, market: Market, settings: Settings) -> int:
     return run_id
 
 
+def run_on_demand(conn: sqlite3.Connection, market: Market, wanted: list[Target]) -> int:
+    """Цены только что внесённых предметов — не дожидаясь планового сбора. Курсы не снимает."""
+    with conn:
+        run_id = conn.execute(
+            "INSERT INTO collector_runs (started_at, status, kind) VALUES (?, 'running', 'on_demand')", (utcnow(),)
+        ).lastrowid
+    problems: list[str] = []
+    try:
+        total, ok = _collect_prices(conn, market, run_id, problems, wanted)
+    except Exception as e:
+        _finish(conn, run_id, "failed", 0, 0, False, problems + [f"сбой: {e!r}"])
+        raise
+    _finish(conn, run_id, "ok" if ok == total else "partial" if ok else "failed", total, ok, False, problems)
+    return run_id
+
+
+def missing_prices(conn: sqlite3.Connection, item: str, currency: Currency) -> Target | None:
+    """Что снять сразу для нового предмета: валюта строки и USD, если по ним ещё нет ни одного снимка."""
+    missing = tuple(
+        c for c in USER_CURRENCIES if c in (currency, Currency.USD) and conn.execute(
+            "SELECT 1 FROM price_snapshots WHERE market_hash_name = ? AND currency = ? LIMIT 1", (item, int(c))
+        ).fetchone() is None
+    )
+    return Target(item, missing) if missing else None
+
+
 def _collect_rates(conn: sqlite3.Connection, market: Market, settings: Settings, run_id: int, problems: list[str]) -> bool:
     prices: dict[str, dict[Currency, int | None]] = {}
     for name in settings.rate_items:
@@ -105,10 +131,12 @@ def _collect_rates(conn: sqlite3.Connection, market: Market, settings: Settings,
     return len(rates) == len(RATE_CURRENCIES)
 
 
-def _collect_prices(conn: sqlite3.Connection, market: Market, run_id: int, problems: list[str]) -> tuple[int, int]:
+def _collect_prices(
+    conn: sqlite3.Connection, market: Market, run_id: int, problems: list[str], wanted: list[Target] | None = None
+) -> tuple[int, int]:
     rates = latest_rates(conn)
     total = ok = consecutive_failures = 0
-    for target in targets(conn):
+    for target in targets(conn) if wanted is None else wanted:
         for currency in target.currencies:
             total += 1
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:

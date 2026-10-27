@@ -14,6 +14,15 @@
 - `steamfolio/journal.py` — запись операций, изменение, удаление, откат с предпросмотром и проверкой.
 - `steamfolio/fx.py` — курс на дату операции: Steam с начала истории, раньше — ЦБ РФ.
 
+## Этап 3: веб-интерфейс
+
+Сайт: https://steamportfolio.duckdns.org (Caddy → uvicorn на 127.0.0.1:8000, служба `steamfolio-web`).
+
+- `steamfolio/web/` — FastAPI: страницы «Портфолио» и «Ордера», JSON API, шаблоны и статика.
+- `steamfolio/views.py` — строки таблиц: текущая цена, % к средней и за сутки/неделю/месяц, итоги в USD.
+- `steamfolio/catalog.py` — справочник предметов (ByMykel/CSGO-API): иконки, типы, подсказки.
+- `steamfolio/auth.py` — вход: scrypt, сессии на 30 дней, пауза после 5 неверных попыток.
+
 Команды на сервере:
 
 ```bash
@@ -21,6 +30,8 @@ steamfolio report --links   # таблица последнего запуска
 steamfolio runs             # история запусков
 steamfolio track list       # отслеживаемые предметы
 steamfolio demo             # демонстрация журнала и отката на временной базе
+steamfolio set-password     # пароль для входа на сайт (логин admin)
+steamfolio catalog type "Название" "Наклейки операций"   # переопределить тип предмета
 ```
 
 Установка или обновление на сервере (от root, из корня проекта): `bash deploy/install.sh`.

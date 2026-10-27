@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Ордера · Портфолио Steam{% endblock %}
+{% block content %}
+<section class="summary" id="summary"></section>
+<div class="toolbar">
+  <button class="primary" id="btn-order">Новый ордер</button>
+  <button id="btn-accounts">Аккаунты</button>
+  <span class="spacer"></span>
+  <span class="muted small" id="rows-count"></span>
+</div>
+<div class="table-wrap" id="table"></div>
+{% endblock %}
+{% block scripts %}<script>SF.ordersPage();</script>{% endblock %}

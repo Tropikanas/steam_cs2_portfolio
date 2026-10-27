@@ -1,4 +1,5 @@
 import argparse
+import getpass
 import logging
 import sqlite3
 import sys
@@ -6,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from steamfolio import collector, db
+from steamfolio import auth, catalog, collector, db
 from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency, format_minor
 from steamfolio.market import Market, SteamHttp, listing_url, nameids
 from steamfolio.settings import Settings, load_settings
@@ -27,6 +28,11 @@ def cmd_collect(conn: sqlite3.Connection, settings: Settings, args: argparse.Nam
             nameids.refresh(conn, settings.nameids_url, settings.proxy)
         except Exception as e:  # старый справочник лучше, чем никакого
             log.warning("Не удалось обновить справочник item_nameid: %r", e)
+    if catalog.is_stale(conn):
+        try:
+            catalog.refresh(conn, settings.proxy)
+        except Exception as e:
+            log.warning("Не удалось обновить справочник предметов: %r", e)
     http = SteamHttp(settings.request_delay, settings.proxy)
     try:
         run_id = collector.run(conn, Market(conn, http), settings)
@@ -38,7 +44,9 @@ def cmd_collect(conn: sqlite3.Connection, settings: Settings, args: argparse.Nam
 
 
 def cmd_runs(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
-    rows = conn.execute("SELECT * FROM collector_runs ORDER BY id DESC LIMIT ?", (args.limit,)).fetchall()
+    rows = conn.execute(
+        "SELECT * FROM collector_runs WHERE kind = 'scheduled' ORDER BY id DESC LIMIT ?", (args.limit,)
+    ).fetchall()
     print(f"{'#':>4}  {'начало':<22} {'конец':<22} {'статус':<8} {'цены':>7}  курсы")
     for r in rows:
         print(
@@ -46,7 +54,7 @@ def cmd_runs(conn: sqlite3.Connection, settings: Settings, args: argparse.Namesp
             f"{r['quotes_ok']:>3}/{r['quotes_total']:<3}  {'да' if r['rates_ok'] else 'нет'}"
         )
     last_ok = conn.execute(
-        "SELECT MAX(finished_at) FROM collector_runs WHERE status IN ('ok', 'partial')"
+        "SELECT MAX(finished_at) FROM collector_runs WHERE kind = 'scheduled' AND status IN ('ok', 'partial')"
     ).fetchone()[0]
     print(f"\nПоследнее успешное обновление: {msk(last_ok)}")
     return 0
@@ -54,7 +62,8 @@ def cmd_runs(conn: sqlite3.Connection, settings: Settings, args: argparse.Namesp
 
 def cmd_report(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
     run = conn.execute(
-        "SELECT * FROM collector_runs WHERE (? IS NULL AND status != 'running') OR id = ? ORDER BY id DESC LIMIT 1",
+        """SELECT * FROM collector_runs WHERE (? IS NULL AND status != 'running' AND kind = 'scheduled') OR id = ?
+           ORDER BY id DESC LIMIT 1""",
         (args.run, args.run),
     ).fetchone()
     if run is None:
@@ -144,6 +153,31 @@ def cmd_nameid(conn: sqlite3.Connection, settings: Settings, args: argparse.Name
     return 0
 
 
+def cmd_set_password(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
+    password = getpass.getpass("Новый пароль (от 10 символов): ")
+    if password != getpass.getpass("Ещё раз: "):
+        print("Пароли не совпадают")
+        return 1
+    try:
+        auth.set_password(conn, args.login, password)
+    except ValueError as e:
+        print(f"Ошибка: {e}")
+        return 1
+    print(f"Пароль для {args.login} задан. Все прежние сессии на сайте закрыты.")
+    return 0
+
+
+def cmd_catalog(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
+    if args.action == "refresh":
+        catalog.refresh(conn, settings.proxy)
+    elif args.action == "type":
+        catalog.set_type(conn, args.name, args.type or None)
+    else:
+        for item in catalog.search(conn, args.name or ""):
+            print(f"{item['type']:<22} {item['name']}")
+    return 0
+
+
 def cmd_demo(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
     from steamfolio import demo
 
@@ -184,6 +218,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("demo", help="демонстрация журнала и отката на временной базе")
     s.set_defaults(func=cmd_demo)
+
+    s = sub.add_parser("set-password", help="задать пароль для входа на сайт")
+    s.add_argument("--login", default="admin")
+    s.set_defaults(func=cmd_set_password)
+
+    s = sub.add_parser("catalog", help="справочник предметов")
+    s.add_argument("action", choices=["refresh", "search", "type"])
+    s.add_argument("name", nargs="?", help="название или часть названия")
+    s.add_argument("type", nargs="?", help=f"для type: один из {', '.join(catalog.TYPES)}; пусто — автоматически")
+    s.set_defaults(func=cmd_catalog)
     return p
 
 

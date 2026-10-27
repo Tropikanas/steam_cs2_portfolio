@@ -45,6 +45,7 @@ class Op:
     payload: dict[str, Any] | None = None
     comment: str = ""
     cancelled: bool = False
+    to_account_id: int | None = None  # для переноса: куда (account_id — откуда)
 
     @property
     def sort_key(self) -> tuple:
@@ -97,6 +98,7 @@ class Op:
             payload=json.loads(row["payload"]) if row["payload"] else None,
             comment=row["comment"],
             cancelled=row["cancelled_at"] is not None,
+            to_account_id=row["to_account_id"],
         )
 
 
@@ -207,10 +209,12 @@ def replay(ops: list[Op]) -> Ledger:
     ledger = Ledger()
     current = effective_ops(ops)
     valid_fills = _replay_orders(ledger, sorted((op for op in current if op.kind.startswith("order_")), key=lambda o: o.entry_key))
-    timeline = [op for op in current if op.kind in ("buy", "sell") or op.id in valid_fills]
+    timeline = [op for op in current if op.kind in ("buy", "sell", "transfer") or op.id in valid_fills]
     for op in sorted(timeline, key=lambda o: o.sort_key):
         if op.kind == "sell":
             _sell(ledger, op)
+        elif op.kind == "transfer":
+            _transfer(ledger, op)
         else:
             _buy(ledger, op)
     return ledger
@@ -258,6 +262,35 @@ def _buy(ledger: Ledger, op: Op) -> None:
     pos.cost += amount
     pos.cost_usd += amount_usd
     ledger.invested_usd += amount_usd
+
+
+def _transfer(ledger: Ledger, op: Op) -> None:
+    """Перенос части строки на другой аккаунт: себестоимость переезжает по средней цене, прибыли нет."""
+    src_key = RowKey(op.market_hash_name, op.account_id, op.currency)
+    src = ledger.positions.get(src_key)
+    have = src.quantity if src else 0
+    if op.quantity > have:
+        ledger.violations.append(
+            Violation(op.id, f"перенос {op.quantity} шт. «{op.market_hash_name}» {op.op_date:%d.%m.%Y} при остатке {have} шт.")
+        )
+        return
+    avg, avg_usd = src.avg_price, src.avg_price_usd
+    dst_key = RowKey(op.market_hash_name, op.to_account_id, op.currency)
+    dst = ledger.positions.setdefault(dst_key, Position(dst_key))
+    if dst.quantity == 0:
+        dst.cost = dst.cost_usd = Decimal(0)
+        dst.first_buy_date = src.first_buy_date
+    else:
+        dst.first_buy_date = min(dst.first_buy_date, src.first_buy_date)
+    dst.quantity += op.quantity
+    dst.cost += avg * op.quantity
+    dst.cost_usd += avg_usd * op.quantity
+    src.quantity -= op.quantity
+    if src.quantity == 0:
+        src.cost = src.cost_usd = Decimal(0)
+    else:
+        src.cost -= avg * op.quantity
+        src.cost_usd -= avg_usd * op.quantity
 
 
 def _sell(ledger: Ledger, op: Op) -> None:

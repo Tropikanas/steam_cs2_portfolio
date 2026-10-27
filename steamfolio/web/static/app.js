@@ -63,7 +63,9 @@ const SF = (() => {
   // ---------- таблица с сортировкой и фильтрами ----------
 
   // Фильтр числовой колонки: «>10», «<5», «10..20», «=3»; иначе — поиск подстроки.
+  // Фильтр-список (filter: "list"): выбранные значения; строка подходит, если у неё есть хотя бы одно из них.
   function matches(filter, col, row) {
+    if (Array.isArray(filter)) return !filter.length || col.values(row).some((v) => filter.includes(v));
     const f = filter.trim();
     if (!f) return true;
     const value = col.value ? col.value(row) : row[col.key];
@@ -80,6 +82,61 @@ const SF = (() => {
     }
     const text = (col.text ? col.text(row) : value ?? "").toString().toLowerCase();
     return text.includes(f.toLowerCase());
+  }
+
+  const filterSet = (v) => Array.isArray(v) ? v.length > 0 : !!(v || "").trim();
+  const filterText = (v) => Array.isArray(v) ? v.join(", ") : (v || "").trim();
+  const listLabel = (v) => !v || !v.length ? "Все" : v.length === 1 ? v[0] : `Выбрано: ${v.length}`;
+
+  // Выпадающий список с галочками для фильтра колонки; открыт может быть только один.
+  let openList = null;
+  document.addEventListener("click", (e) => {
+    if (openList && !openList.contains(e.target) && !openList.owner.contains(e.target)) closeList();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openList) closeList(); });
+  window.addEventListener("scroll", (e) => openList && !openList.contains(e.target) && closeList(), true);
+  function closeList() {
+    openList.remove();
+    openList = null;
+  }
+
+  function bindListFilter(wrap, col, filters, render) {
+    const btn = wrap.querySelector("button");
+    // Список живёт в <body>: внутри таблицы его перекрывают закреплённые колонки.
+    const list = document.createElement("div");
+    list.className = "multi-list";
+    list.owner = btn;
+    const sync = () => {
+      btn.textContent = listLabel(filters[col.id]) + " ▾";
+      btn.title = filters[col.id] && filters[col.id].length ? filterText(filters[col.id]) : "";
+      btn.classList.toggle("set", filterSet(filters[col.id]));
+    };
+    btn.onclick = () => {
+      if (openList === list) { closeList(); return; }
+      if (openList) closeList();
+      const chosen = filters[col.id] || [];
+      list.innerHTML = col.options().map((o) =>
+        `<label class="toggle"><input type="checkbox" value="${esc(o)}" ${chosen.includes(o) ? "checked" : ""}> ${esc(o)}</label>`).join("")
+        + '<button type="button" class="link small" data-reset>Сбросить</button>';
+      list.onchange = () => {
+        const picked = [...list.querySelectorAll("input:checked")].map((i) => i.value);
+        if (picked.length) filters[col.id] = picked; else delete filters[col.id];
+        sync();
+        render();
+      };
+      list.querySelector("[data-reset]").onclick = () => {
+        list.querySelectorAll("input").forEach((i) => { i.checked = false; });
+        list.onchange();
+      };
+      // Таблица прокручивается по горизонтали — список позиционируется относительно окна, чтобы не обрезался.
+      const r = btn.getBoundingClientRect();
+      list.style.top = `${r.bottom + 2}px`;
+      list.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 228))}px`;
+      document.body.append(list);
+      openList = list;
+    };
+    sync();
+    return sync;
   }
 
   // filters — общий объект страницы: значения фильтров переживают перезагрузку данных.
@@ -119,8 +176,9 @@ const SF = (() => {
     container.innerHTML = `<table><thead>
       <tr>${columns.map((c) => `<th class="${(c.cls || "").replace(/\b(num|icon|name|actions|comment)\b/g, "")} ${c.sortable !== false ? "sortable" : ""} ${c.numeric ? "num" : ""}"
         ${c.sortable !== false ? `data-id="${c.id}"` : ""}>${esc(c.title)}<span class="arrow"></span></th>`).join("")}</tr>
-      <tr class="filters">${columns.map((c) => `<th class="${(c.cls || "").replace(/\b(num|icon|name|actions|comment)\b/g, "")}">${c.filter
-        ? `<input data-id="${c.id}" placeholder="${c.numeric ? "&gt;0" : "фильтр"}" aria-label="Фильтр: ${esc(c.title)}">` : ""}</th>`).join("")}</tr>
+      <tr class="filters">${columns.map((c) => `<th class="${(c.cls || "").replace(/\b(num|icon|name|actions|comment)\b/g, "")}">${
+        c.filter === "list" ? `<div class="multi" data-list="${c.id}"><button type="button" aria-label="Фильтр: ${esc(c.title)}"></button></div>`
+        : c.filter ? `<input data-id="${c.id}" placeholder="${c.numeric ? "&gt;0" : "фильтр"}" aria-label="Фильтр: ${esc(c.title)}">` : ""}</th>`).join("")}</tr>
       </thead><tbody></tbody></table>`;
     container.querySelectorAll("th[data-id]").forEach((th) => th.addEventListener("click", () => {
       const id = th.dataset.id;
@@ -135,12 +193,15 @@ const SF = (() => {
         render();
       });
     });
+    const syncLists = [...container.querySelectorAll("tr.filters .multi")].map((wrap) =>
+      bindListFilter(wrap, columns.find((c) => c.id === wrap.dataset.list), filters, render));
     return {
       setRows(r) { rows = r; render(); },
       render,
       clearFilters() {
         Object.keys(filters).forEach((k) => delete filters[k]);
         container.querySelectorAll("tr.filters input").forEach((i) => { i.value = ""; });
+        syncLists.forEach((s) => s());
         render();
       },
     };
@@ -342,6 +403,8 @@ const SF = (() => {
     return meta;
   }
   const activeAccounts = () => meta.accounts.filter((a) => !a.hidden);
+  // Для фильтров — все аккаунты, включая скрытые: по ним могут быть закрытые позиции и операции.
+  const accountNames = () => meta.accounts.map((a) => a.name);
   const accountOptions = (exclude) => activeAccounts().filter((a) => a.id !== exclude).map((a) => ({ value: a.id, label: a.name }));
   const currencyOptions = () => meta.currencies.map((c) => ({ value: c, label: c }));
 
@@ -423,7 +486,8 @@ const SF = (() => {
       { id: "pct_1d", title: "% сутки", key: "pct_1d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_1d) },
       { id: "pct_7d", title: "% неделя", key: "pct_7d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_7d) },
       { id: "pct_30d", title: "% месяц", key: "pct_30d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_30d) },
-      { id: "account", title: "Аккаунт", key: "account", filter: true, html: (r) => esc(r.account) },
+      { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames,
+        values: (r) => r.account_id != null ? [r.account] : r.accounts.map((a) => a.name), html: (r) => esc(r.account) },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true,
         html: (r) => collapse.checked || closed.checked ? esc(r.comment)
           : `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`,
@@ -603,10 +667,10 @@ const SF = (() => {
     // Выгрузка в Excel: портфель всегда по аккаунтам; фильтры таблицы — по выбору пользователя.
     async function exportExcel(btn) {
       const cols = columns();
-      const active = cols.filter((c) => c.filter && (filters[c.id] || "").trim());
+      const active = cols.filter((c) => c.filter && filterSet(filters[c.id]));
       let body = {};
       if (active.length) {
-        const list = active.map((c) => `<li>${esc(c.title)}: <b>${esc(filters[c.id].trim())}</b></li>`).join("");
+        const list = active.map((c) => `<li>${esc(c.title)}: <b>${esc(filterText(filters[c.id]))}</b></li>`).join("");
         const useFilters = await choiceDialog("Выгрузка в Excel", `<p>Учитывать выставленные фильтры?</p><ul>${list}</ul>
           <p class="muted small">Фильтры применяются к листам «Портфель» и «Закрытые позиции». Ордера и журнал выгружаются полностью.</p>`,
           [{ label: "Нет, выгрузить всё", value: false }, { label: "Да, с фильтрами", value: true, primary: true }]);
@@ -643,7 +707,8 @@ const SF = (() => {
       { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
       { id: "price", title: "Цена за шт.", key: "price", cls: "num", numeric: true, filter: true, html: (r) => money(r.price, r.currency) },
       { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
-      { id: "account", title: "Аккаунт", key: "account", filter: true, html: (r) => esc(r.account) },
+      { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames, values: (r) => [r.account],
+        html: (r) => esc(r.account) },
       { id: "market", title: "Лучший ордер на площадке", key: "market_best", cls: "num", numeric: true, filter: true,
         html: (r) => `<span title="снят ${esc(dateTime(r.market_at))}">${money(r.market_best, r.currency)}</span>${r.outbid ? '<span class="badge">перебит</span>' : ""}` },
       { id: "total", title: "Сумма", key: "total", cls: "num", numeric: true, filter: true, html: (r) => money(r.total, r.currency) },
@@ -799,7 +864,8 @@ const SF = (() => {
         html: (r) => r.fx_rate == null ? '<span class="muted">—</span>'
           : `${num(r.fx_rate, 4)}<span class="note">${FX_SHORT[r.fx_source] || ""}</span>` },
       { id: "sum_usd", title: "Сумма, $", key: "sum_usd", cls: "num", numeric: true, filter: true, html: (r) => money(r.sum_usd, "USD") },
-      { id: "account", title: "Аккаунт", key: "account", filter: true, text: (r) => r.account + " " + r.to_account,
+      { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames,
+        values: (r) => [r.account, r.to_account].filter(Boolean),
         html: (r) => esc(r.account) + (r.to_account ? ` → ${esc(r.to_account)}` : "") },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
       { id: "actions", title: "", cls: "actions", sortable: false,

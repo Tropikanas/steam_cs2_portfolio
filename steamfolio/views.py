@@ -14,7 +14,8 @@ from typing import Any
 from steamfolio import catalog
 from steamfolio.collector import latest_rates
 from steamfolio.currencies import Currency
-from steamfolio.ledger import Ledger, Position
+from steamfolio.journal import KIND_NAMES, Preview
+from steamfolio.ledger import DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, effective_ops
 from steamfolio.market import listing_url
 
 # Снимок «24 ч назад» может быть сделан чуть позже: сбор идёт раз в 6 часов со случайной задержкой.
@@ -157,6 +158,150 @@ def portfolio(
             "unpriced": unpriced,
         },
         "last_update": last_update(conn),
+    }
+
+
+FIELD_NAMES = {
+    "op_date": "дата", "market_hash_name": "предмет", "account_id": "аккаунт", "currency": "валюта",
+    "quantity": "количество", "price": "цена", "fx_rate": "курс", "comment": "комментарий",
+}
+TRADE_KINDS = ("buy", "sell", "order_filled")
+
+
+def _op_values(op: Op, account_names: dict[int, str]) -> dict[str, Any]:
+    """Поля операции в виде для формы изменения."""
+    return {
+        "date": op.op_date.isoformat(),
+        "item": op.market_hash_name,
+        "account_id": op.account_id,
+        "account": account_names.get(op.account_id, "?"),
+        "currency": op.currency.name if op.currency is not None else None,
+        "quantity": op.quantity,
+        "price": _units(op.price),
+        "fx_rate": float(op.fx_rate) if op.fx_rate is not None else None,
+        "fx_source": op.fx_source,
+        "comment": op.comment,
+    }
+
+
+def _field_text(field: str, value: Any, currency: Any, account_names: dict[int, str]) -> str:
+    if value is None or value == "":
+        return "—"
+    if field == "op_date":
+        return datetime.fromisoformat(value).strftime("%d.%m.%Y")
+    if field == "account_id":
+        return account_names.get(value, "?")
+    if field == "currency":
+        return Currency(value).name
+    if field == "price":
+        cur = Currency(currency).name if currency is not None else ""
+        return f"{Decimal(value) / 100:,.2f}".replace(",", " ").replace(".", ",") + f" {cur}".rstrip()
+    if field == "fx_rate":
+        return f"{Decimal(value):.4f}".replace(".", ",")
+    return str(value)
+
+
+def journal(conn: sqlite3.Connection, ops: list[Op], portfolio_id: int = 1) -> dict[str, Any]:
+    account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
+    by_id = {op.id: op for op in ops}
+    current = {op.id: op for op in effective_ops(ops)}
+    edited_by: dict[int, list[int]] = {}
+    deleted_by: dict[int, list[int]] = {}
+    for op in ops:
+        if op.kind in EDIT_KINDS:
+            edited_by.setdefault(op.target_id, []).append(op.id)
+        elif op.kind in DELETE_KINDS:
+            deleted_by.setdefault(op.target_id, []).append(op.id)
+    history: dict[int, list[dict[str, str]]] = {}
+    for row in conn.execute(
+        """SELECT c.operation_id, c.action, c.at FROM operation_cancellations c
+           JOIN operations o ON o.id = c.operation_id WHERE o.portfolio_id = ? ORDER BY c.id""",
+        (portfolio_id,),
+    ):
+        history.setdefault(row["operation_id"], []).append({"action": row["action"], "at": row["at"]})
+    items = _items(conn, {op.market_hash_name for op in ops if op.market_hash_name})
+
+    rows = []
+    for op in ops:
+        changes = []
+        if op.kind in EDIT_KINDS:
+            before, after = op.payload["before"], op.payload["after"]
+            for field, label in FIELD_NAMES.items():
+                if before.get(field) != after.get(field):
+                    changes.append({
+                        "field": label,
+                        "before": _field_text(field, before.get(field), before.get("currency"), account_names),
+                        "after": _field_text(field, after.get(field), after.get("currency"), account_names),
+                    })
+        has_money = op.kind in TRADE_KINDS or op.kind in EDIT_KINDS
+        sum_usd = (
+            _units(Decimal(op.quantity * op.price) / op.fx_rate)
+            if has_money and op.fx_rate and op.price is not None and op.quantity else None
+        )
+        active_target = op.kind in TRADE_KINDS and not op.cancelled and op.id in current
+        target = by_id.get(op.target_id) if op.target_id else None
+        rows.append({
+            "id": op.id,
+            "kind": op.kind,
+            "kind_name": KIND_NAMES[op.kind],
+            "op_date": op.op_date.isoformat(),
+            "created_at": op.created_at,
+            "item": op.market_hash_name,
+            "icon": (items.get(op.market_hash_name) or {"icon_url": None})["icon_url"],
+            "quantity": op.quantity,
+            "price": _units(op.price) if op.kind != "transfer" else None,
+            "currency": op.currency.name if op.currency is not None else None,
+            "fx_rate": float(op.fx_rate) if op.fx_rate is not None and has_money else None,
+            "fx_source": op.fx_source if has_money else None,
+            "sum_usd": sum_usd,
+            "account": account_names.get(op.account_id, "") if op.account_id else "",
+            "to_account": account_names.get(op.to_account_id, "") if op.to_account_id else "",
+            "comment": op.comment,
+            "cancelled": op.cancelled,
+            "history": history.get(op.id, []),
+            "target_id": op.target_id,
+            "target_kind": KIND_NAMES[target.kind] if target else None,
+            "order_id": op.order_id,
+            "edited_by": edited_by.get(op.id, []),
+            "deleted_by": deleted_by.get(op.id, []),
+            "changes": changes,
+            "can_edit": active_target,
+            "current": _op_values(current[op.id], account_names) if active_target else None,
+        })
+    rows.sort(key=lambda r: r["id"], reverse=True)
+    return {"rows": rows, "accounts": account_names}
+
+
+def preview(conn: sqlite3.Connection, result: Preview, ops: list[Op], portfolio_id: int = 1) -> dict[str, Any]:
+    account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
+    by_id = {op.id: op for op in ops}
+    return {
+        "allowed": result.allowed,
+        "violations": result.violations,
+        "positions": [
+            {
+                "item": c.key.market_hash_name,
+                "account": account_names.get(c.key.account_id, "?"),
+                "currency": c.key.currency.name,
+                "quantity_before": c.quantity_before,
+                "quantity_after": c.quantity_after,
+                "avg_before": _units(c.avg_before, 4),
+                "avg_after": _units(c.avg_after, 4),
+            }
+            for c in result.positions
+        ],
+        "sales": [
+            {
+                "op_id": s.op_id,
+                "item": by_id[s.op_id].market_hash_name,
+                "currency": by_id[s.op_id].currency.name,
+                "profit_before": _units(s.profit_before),
+                "profit_after": _units(s.profit_after),
+                "profit_usd_before": _units(s.profit_usd_before),
+                "profit_usd_after": _units(s.profit_usd_after),
+            }
+            for s in result.sales
+        ],
     }
 
 

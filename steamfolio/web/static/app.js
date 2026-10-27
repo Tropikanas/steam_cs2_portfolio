@@ -83,12 +83,13 @@ const SF = (() => {
   }
 
   // filters — общий объект страницы: значения фильтров переживают перезагрузку данных.
-  function makeTable(container, columns, { storageKey, empty, filters = {} }) {
+  function makeTable(container, columns, { storageKey, empty, filters = {}, rowClass, rowId, extraFilter, defaultSort = null }) {
     let rows = [];
-    let sort = JSON.parse(store.get(storageKey + ".sort", "null") || "null");
+    let sort = JSON.parse(store.get(storageKey + ".sort", "null") || "null") || defaultSort;
 
     function render() {
-      const visible = rows.filter((r) => columns.every((c) => !c.filter || matches(filters[c.id] || "", c, r)));
+      const visible = rows.filter((r) => (!extraFilter || extraFilter(r))
+        && columns.every((c) => !c.filter || matches(filters[c.id] || "", c, r)));
       if (sort) {
         const col = columns.find((c) => c.id === sort.id);
         if (col) {
@@ -104,7 +105,7 @@ const SF = (() => {
         }
       }
       const tbody = container.querySelector("tbody");
-      tbody.innerHTML = visible.length ? visible.map((r) => `<tr>${columns.map((c) =>
+      tbody.innerHTML = visible.length ? visible.map((r) => `<tr class="${rowClass ? rowClass(r) : ""}" ${rowId ? `data-row="${esc(rowId(r))}"` : ""}>${columns.map((c) =>
         `<td class="${c.cls || ""}">${c.html(r)}</td>`).join("")}</tr>`).join("")
         : `<tr><td colspan="${columns.length}" class="empty-state">${rows.length ? "Ничего не найдено — измените фильтры" : empty}</td></tr>`;
       visible.forEach((r, i) => columns.forEach((c, j) => c.bind && c.bind(tbody.rows[i].cells[j], r)));
@@ -123,7 +124,7 @@ const SF = (() => {
       </thead><tbody></tbody></table>`;
     container.querySelectorAll("th[data-id]").forEach((th) => th.addEventListener("click", () => {
       const id = th.dataset.id;
-      sort = sort && sort.id === id ? (sort.dir > 0 ? { id, dir: -1 } : null) : { id, dir: 1 };
+      sort = sort && sort.id === id ? (sort.dir > 0 ? { id, dir: -1 } : defaultSort) : { id, dir: 1 };
       store.set(storageKey + ".sort", JSON.stringify(sort));
       render();
     }));
@@ -134,7 +135,15 @@ const SF = (() => {
         render();
       });
     });
-    return { setRows(r) { rows = r; render(); } };
+    return {
+      setRows(r) { rows = r; render(); },
+      render,
+      clearFilters() {
+        Object.keys(filters).forEach((k) => delete filters[k]);
+        container.querySelectorAll("tr.filters input").forEach((i) => { i.value = ""; });
+        render();
+      },
+    };
   }
 
   // ---------- формы в диалогах ----------
@@ -693,5 +702,196 @@ const SF = (() => {
     loadMeta().then(reload).catch((e) => toast(e.message, true));
   }
 
-  return { portfolioPage, ordersPage };
+  // ---------- «Журнал операций» ----------
+
+  function journalPage() {
+    const FX_SHORT = { steam: "Steam", cbr: "ЦБ", manual: "вручную", usd: "" };
+    const mskDate = (ts) => new Date(ts).toLocaleDateString("sv-SE", { timeZone: "Europe/Moscow" });
+    const opLink = (id) => `<a class="oplink" data-op="${id}">#${id}</a>`;
+    const el = (id) => document.getElementById(id);
+    let rows = [];
+    let accountsById = {};
+
+    function notes(r) {
+      const out = [];
+      if (r.target_id) out.push(`к операции ${opLink(r.target_id)} (${esc(r.target_kind || "")})`);
+      if (r.order_id && r.kind !== "order_placed") out.push(`ордер ${opLink(r.order_id)}`);
+      if (r.edited_by.length) out.push(`изменена: ${r.edited_by.map(opLink).join(", ")}`);
+      if (r.deleted_by.length) out.push(`удалена: ${r.deleted_by.map(opLink).join(", ")}`);
+      const last = r.history[r.history.length - 1];
+      if (r.cancelled && last) out.push(`отменена ${esc(dateTime(last.at))}`);
+      return out.map((n) => `<span class="note">${n}</span>`).join("");
+    }
+
+    function historyTitle(r) {
+      return r.history.map((h) => `${h.action === "cancel" ? "откат" : "возврат"}: ${dateTime(h.at)}`).join("\n");
+    }
+
+    const columns = [
+      { id: "id", title: "№", key: "id", numeric: true, filter: true, cls: "num", html: (r) => `#${r.id}` },
+      { id: "op_date", title: "Дата операции", key: "op_date", filter: true, text: (r) => date(r.op_date), html: (r) => date(r.op_date) },
+      { id: "created_at", title: "Действие в системе", key: "created_at", filter: true, text: (r) => dateTime(r.created_at),
+        html: (r) => `<span class="small" title="${esc(historyTitle(r))}">${esc(dateTime(r.created_at))}</span>` },
+      { id: "kind", title: "Тип", key: "kind_name", filter: true, cls: "kind", html: (r) => esc(r.kind_name) + notes(r) },
+      { id: "item", title: "Предмет", key: "item", filter: true, cls: "name",
+        html: (r) => `${esc(r.item || "")}${r.changes.length ? `<span class="changes">${r.changes.map((c) =>
+          `${esc(c.field)}: ${esc(c.before)} → <b>${esc(c.after)}</b>`).join("<br>")}</span>` : ""}` },
+      { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
+      { id: "price", title: "Цена", key: "price", cls: "num", numeric: true, filter: true, html: (r) => r.price == null ? "—" : money(r.price, r.currency) },
+      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency || "" },
+      { id: "fx", title: "Курс к USD", key: "fx_rate", cls: "num", numeric: true, filter: true,
+        html: (r) => r.fx_rate == null ? '<span class="muted">—</span>'
+          : `${num(r.fx_rate, 4)}<span class="note">${FX_SHORT[r.fx_source] || ""}</span>` },
+      { id: "sum_usd", title: "Сумма, $", key: "sum_usd", cls: "num", numeric: true, filter: true, html: (r) => money(r.sum_usd, "USD") },
+      { id: "account", title: "Аккаунт", key: "account", filter: true, text: (r) => r.account + " " + r.to_account,
+        html: (r) => esc(r.account) + (r.to_account ? ` → ${esc(r.to_account)}` : "") },
+      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
+      { id: "actions", title: "", cls: "actions", sortable: false,
+        html: (r) => (r.cancelled ? '<button class="small" data-a="restore">Вернуть</button>' : '<button class="small" data-a="cancel">Откатить</button>')
+          + (r.can_edit ? '<button class="small" data-a="edit">Изменить</button><button class="small" data-a="delete">Удалить</button>' : ""),
+        bind: (td, r) => td.querySelectorAll("button").forEach((b) => b.onclick = () => ({
+          cancel: () => toggle(r, "cancel"), restore: () => toggle(r, "restore"), edit: () => editForm(r), delete: () => deleteForm(r),
+        })[b.dataset.a]()) },
+    ];
+
+    const table = makeTable(el("table"), columns, {
+      storageKey: "journal",
+      empty: "Операций пока нет",
+      defaultSort: { id: "id", dir: -1 },
+      rowId: (r) => r.id,
+      rowClass: (r) => r.cancelled ? "cancelled" : "",
+      extraFilter: (r) => {
+        if (el("f-kind").value && r.kind_name !== el("f-kind").value) return false;
+        if (el("f-hide-cancelled").checked && r.cancelled) return false;
+        const d = el("f-basis").value === "op_date" ? r.op_date : mskDate(r.created_at);
+        if (el("f-from").value && d < el("f-from").value) return false;
+        if (el("f-to").value && d > el("f-to").value) return false;
+        return true;
+      },
+    });
+    ["f-kind", "f-from", "f-to", "f-basis", "f-hide-cancelled"].forEach((id) => el(id).addEventListener("change", table.render));
+    el("f-reset").onclick = () => {
+      el("f-kind").value = el("f-from").value = el("f-to").value = "";
+      el("f-hide-cancelled").checked = false;
+      table.clearFilters();
+    };
+
+    // Переход к операции по ссылке #N: если её скрывают фильтры — сбрасываем их.
+    function goTo(id) {
+      let tr = document.querySelector(`tr[data-row="${id}"]`);
+      if (!tr) { el("f-reset").click(); tr = document.querySelector(`tr[data-row="${id}"]`); }
+      if (!tr) return;
+      tr.scrollIntoView({ block: "center", behavior: "smooth" });
+      tr.classList.remove("flash");
+      void tr.offsetWidth;
+      tr.classList.add("flash");
+    }
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest(".oplink");
+      if (!a) return;
+      e.preventDefault();
+      const dlg = a.closest("dialog");
+      if (dlg) dlg.close();
+      goTo(+a.dataset.op);
+    });
+
+    async function reload() {
+      const data = await api("GET", "/api/journal");
+      rows = data.rows;
+      accountsById = data.accounts;
+      const kinds = [...new Set(rows.map((r) => r.kind_name))].sort((a, b) => a.localeCompare(b, "ru"));
+      const keep = el("f-kind").value;
+      el("f-kind").innerHTML = '<option value="">все</option>' + kinds.map((k) => `<option ${k === keep ? "selected" : ""}>${esc(k)}</option>`).join("");
+      table.setRows(rows);
+    }
+
+    const linkify = (text) => esc(text).replace(/#(\d+)/g, (_, id) => opLink(id));
+
+    function previewHtml(p) {
+      const items = [];
+      p.positions.forEach((c) => items.push(`${esc(c.item)} · ${esc(c.account)} · ${c.currency}: количество <b>${num(c.quantity_before, 0)} → ${num(c.quantity_after, 0)}</b>, средняя ${money(c.avg_before, c.currency, true)} → ${money(c.avg_after, c.currency, true)}`));
+      p.sales.forEach((s) => {
+        if (s.profit_after == null) items.push(`Продажа ${opLink(s.op_id)} (${esc(s.item)}) уйдёт из статистики: прибыль ${money(s.profit_before, s.currency)} (${money(s.profit_usd_before, "USD")})`);
+        else if (s.profit_before == null) items.push(`Продажа ${opLink(s.op_id)} (${esc(s.item)}) вернётся в статистику: прибыль ${money(s.profit_after, s.currency)} (${money(s.profit_usd_after, "USD")})`);
+        else items.push(`Продажа ${opLink(s.op_id)} (${esc(s.item)}): прибыль <b>${money(s.profit_before, s.currency)} → ${money(s.profit_after, s.currency)}</b> (${money(s.profit_usd_before, "USD")} → ${money(s.profit_usd_after, "USD")})`);
+      });
+      return items.length ? `<ul class="preview-list">${items.map((i) => `<li>${i}</li>`).join("")}</ul>`
+        : '<p class="muted">Остатки в портфеле и прибыль не изменятся.</p>';
+    }
+
+    async function toggle(r, action) {
+      let p;
+      try { p = await api("GET", `/api/journal/${r.id}/preview?action=${action}`); } catch (e) { toast(e.message, true); return; }
+      const verb = action === "cancel" ? "Откатить" : "Вернуть";
+      const html = p.allowed ? previewHtml(p)
+        : `<div class="error">${action === "cancel" ? "Откат" : "Возврат"} невозможен — сначала откатите:<ul>${p.violations.map((v) => `<li>${linkify(v)}</li>`).join("")}</ul></div>`;
+      const ctx = openForm({
+        title: `${verb} операцию #${r.id}: ${r.kind_name}${r.item ? " · " + r.item : ""}`,
+        submit: p.allowed ? verb : "Понятно",
+        layout: [{ name: "_", type: "static", label: p.allowed ? "Что изменится" : "", required: false, html }],
+        onSubmit: async () => {
+          if (!p.allowed) return;
+          await api("POST", `/api/journal/${r.id}/${action}`);
+          toast(action === "cancel" ? `Операция #${r.id} откачена` : `Операция #${r.id} возвращена`);
+          await reload();
+        },
+      });
+      if (!p.allowed) ctx.dlg.querySelector("[data-cancel]").classList.add("hidden");
+    }
+
+    function editForm(r) {
+      const c = r.current;
+      const fill = r.kind === "order_filled";
+      const accounts = Object.entries(accountsById).map(([id, name]) => ({ value: +id, label: name }));
+      const layout = [];
+      if (!fill) layout.push({ name: "item", label: "Предмет", type: "item", value: c.item });
+      layout.push(
+        [{ name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: c.quantity },
+          { name: "price", label: r.kind === "sell" ? "Чистая цена за штуку" : "Цена за штуку", inputmode: "decimal",
+            value: String(c.price).replace(".", ","), attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' }],
+      );
+      if (!fill) layout.push(
+        [{ name: "currency", label: "Валюта", type: "select", options: meta.currencies.map((x) => ({ value: x, label: x })), value: c.currency },
+          { name: "account_id", label: "Аккаунт", type: "select", options: accounts, value: c.account_id }],
+      );
+      layout.push(
+        { name: "date", label: "Дата", type: "date", value: c.date, attrs: `max="${meta.today}"` },
+        { name: "fx_rate", label: "Курс к USD, если нужно задать вручную", required: false, inputmode: "decimal",
+          hint: c.currency === "USD" ? "" : `Сейчас: ${num(c.fx_rate, 4)} (${FX_SHORT[c.fx_source] || ""}). Пусто — при смене даты курс подберётся заново${c.fx_source === "manual" ? ", ручной курс сохранится" : ""}.` },
+        { name: "comment", label: "Комментарий", type: "textarea", required: false, value: c.comment },
+      );
+      openForm({
+        title: `Изменить операцию #${r.id} (${r.kind_name})`,
+        submit: "Сохранить изменение",
+        layout,
+        onSubmit: async (v) => {
+          await api("POST", `/api/journal/${r.id}/edit`, {
+            date: v.date, quantity: +v.quantity, price: v.price, comment: v.comment, fx_rate: v.fx_rate || null,
+            ...(fill ? {} : { item: v.item, currency: v.currency, account_id: +v.account_id }),
+          });
+          toast(`Изменение записано в журнал`);
+          await reload();
+        },
+      });
+    }
+
+    function deleteForm(r) {
+      openForm({
+        title: `Удалить операцию #${r.id} (${r.kind_name})?`,
+        submit: "Удалить",
+        layout: [{ name: "_", type: "static", label: "", required: false,
+          html: `<p>${esc(r.item)}: ${num(r.current.quantity, 0)} шт. по ${money(r.current.price, r.current.currency)}, ${date(r.current.date)}.</p>
+            <p class="muted small">Удаление запишется в журнал отдельной операцией — его можно будет откатить.</p>` }],
+        onSubmit: async () => {
+          await api("POST", `/api/journal/${r.id}/delete`);
+          toast(`Операция #${r.id} удалена`);
+          await reload();
+        },
+      });
+    }
+
+    loadMeta().then(reload).catch((e) => toast(e.message, true));
+  }
+
+  return { portfolioPage, ordersPage, journalPage };
 })();

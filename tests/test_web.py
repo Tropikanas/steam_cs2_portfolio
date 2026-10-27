@@ -83,6 +83,53 @@ def test_buy_transfer_and_order_flow(client):
     assert [a["hidden"] for a in meta["accounts"] if a["id"] == acc2] == [True]
 
 
+def test_journal_rollback_edit_delete(client):
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "Основной"}).json()["id"]
+    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
+    buy = client.post("/api/buy", json={**trade, "quantity": 10, "price": "10", "date": "2026-01-10"}).json()["op_id"]
+    sale = client.post("/api/sell", json={**trade, "quantity": 4, "price": "15", "date": "2026-01-20"}).json()["op_id"]
+
+    rows = {r["id"]: r for r in client.get("/api/journal").json()["rows"]}
+    assert rows[buy]["kind_name"] == "покупка"
+    assert rows[buy]["sum_usd"] == 1.25  # 100 ₽ по курсу 80
+    assert rows[buy]["fx_source"] == "cbr"
+    assert rows[buy]["can_edit"] is True
+
+    # откат покупки запрещён, пока есть продажа; предпросмотр называет её
+    preview = client.get(f"/api/journal/{buy}/preview?action=cancel").json()
+    assert preview["allowed"] is False and f"#{sale}" in preview["violations"][0]
+    assert client.post(f"/api/journal/{buy}/cancel").status_code == 400
+
+    # откат продажи: прибыль уходит из статистики, позиция возвращается
+    preview = client.get(f"/api/journal/{sale}/preview?action=cancel").json()
+    assert preview["allowed"] is True
+    assert preview["positions"][0]["quantity_before"] == 6 and preview["positions"][0]["quantity_after"] == 10
+    assert preview["sales"] == [{"op_id": sale, "item": "Kilowatt Case", "currency": "RUB", "profit_before": 20.0,
+                                 "profit_after": None, "profit_usd_before": 0.25, "profit_usd_after": None}]
+    assert client.post(f"/api/journal/{sale}/cancel").status_code == 200
+    rows = {r["id"]: r for r in client.get("/api/journal").json()["rows"]}
+    assert rows[sale]["cancelled"] is True and rows[sale]["history"][0]["action"] == "cancel"
+    assert client.post(f"/api/journal/{sale}/restore").status_code == 200
+
+    # изменение: отдельная строка «было → стало», исходная помечена
+    edit = client.post(f"/api/journal/{buy}/edit", json={"price": "12", "quantity": 10}).json()["op_id"]
+    rows = {r["id"]: r for r in client.get("/api/journal").json()["rows"]}
+    assert rows[edit]["kind_name"] == "покупка изменена"
+    assert rows[edit]["changes"] == [{"field": "цена", "before": "10,00 RUB", "after": "12,00 RUB"}]
+    assert rows[buy]["edited_by"] == [edit]
+    assert rows[buy]["current"]["price"] == 12.0
+    [pos] = client.get("/api/portfolio").json()["rows"]
+    assert pos["avg_price"] == 12.0
+    assert client.post(f"/api/journal/{buy}/edit", json={"price": "12"}).json()["error"] == "ничего не изменилось"
+
+    # удаление продажи и откат удаления
+    deletion = client.post(f"/api/journal/{sale}/delete").json()["op_id"]
+    assert client.get("/api/portfolio").json()["rows"][0]["quantity"] == 10
+    assert client.post(f"/api/journal/{deletion}/cancel").status_code == 200
+    assert client.get("/api/portfolio").json()["rows"][0]["quantity"] == 6
+
+
 def test_fx_endpoint_uses_cbr_before_steam_history(client):
     login(client)
     assert client.get("/api/fx?currency=RUB&on=2021-11-15").json() == {"rate": 80.0, "source": "cbr"}

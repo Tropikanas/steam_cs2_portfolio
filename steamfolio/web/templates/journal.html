@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Журнал операций · Портфолио Steam{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <label class="field-inline">Тип
+    <select id="f-kind"><option value="">все</option></select>
+  </label>
+  <label class="field-inline">с <input type="date" id="f-from"></label>
+  <label class="field-inline">по <input type="date" id="f-to"></label>
+  <label class="field-inline">
+    <select id="f-basis" aria-label="По какой дате фильтровать период">
+      <option value="op_date">по дате операции</option>
+      <option value="created_at">по дате действия в системе</option>
+    </select>
+  </label>
+  <label class="toggle"><input type="checkbox" id="f-hide-cancelled"> Скрыть отменённые</label>
+  <button id="f-reset" class="link">Сбросить</button>
+  <span class="spacer"></span>
+  <span class="muted small" id="rows-count"></span>
+</div>
+<div class="table-wrap" id="table"></div>
+{% endblock %}
+{% block scripts %}<script>SF.journalPage();</script>{% endblock %}

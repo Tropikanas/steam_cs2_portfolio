@@ -140,7 +140,7 @@ class Journal:
 
     def edit(self, op_id: int, **changes) -> int:
         """Изменить покупку, продажу или исполнение ордера. Пишется отдельной операцией «было → стало»."""
-        target = self._current(op_id)
+        target = self.current_op(op_id)
         allowed = FILL_EDITABLE_FIELDS if target.kind == "order_filled" else EDITABLE_FIELDS
         unknown = set(changes) - set(allowed)
         if unknown:
@@ -170,7 +170,7 @@ class Journal:
 
     def delete(self, op_id: int) -> int:
         """Удалить покупку, продажу или исполнение ордера (отдельной операцией, её можно откатить)."""
-        target = self._current(op_id)
+        target = self.current_op(op_id)
         kind = "sell_deleted" if target.kind == "sell" else "buy_deleted"
         return self._add(Op(PENDING_ID, kind, target.op_date, utcnow(), target.market_hash_name, target.account_id,
                             target.currency, target.quantity, target.price, target.fx_rate, target.fx_source,
@@ -281,7 +281,7 @@ class Journal:
             result.append(f"{ref}: {v.message}")
         return result
 
-    def _current(self, op_id: int) -> Op:
+    def current_op(self, op_id: int) -> Op:
         """Покупка/продажа/исполнение в действующем виде (с учётом изменений)."""
         op = self.op(op_id)
         if op.kind not in ("buy", "sell", "order_filled"):

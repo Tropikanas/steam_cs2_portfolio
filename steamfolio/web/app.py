@@ -122,6 +122,17 @@ class ChangeIn(BaseModel):
     comment: str = ""
 
 
+class EditIn(BaseModel):
+    date: Date | None = None
+    item: str | None = None
+    account_id: int | None = None
+    currency: str | None = None
+    quantity: int | None = None
+    price: str | None = None
+    fx_rate: str | None = None
+    comment: str | None = None
+
+
 class AccountIn(BaseModel):
     name: str | None = None
     hidden: bool | None = None
@@ -240,6 +251,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     def orders_page(request: Request, user: User):
         return templates.TemplateResponse(request, "orders.html", {"tab": "orders", "user": user})
 
+    @app.get("/journal", response_class=HTMLResponse)
+    def journal_page(request: Request, user: User):
+        return templates.TemplateResponse(request, "journal.html", {"tab": "journal", "user": user})
+
     # ---------- API: чтение ----------
 
     @app.get("/api/meta")
@@ -338,6 +353,59 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     @app.post("/api/orders/{order_id}/remove")
     def remove_order(order_id: int, conn: Conn, user: User) -> dict[str, Any]:
         return {"op_id": journal(conn, user).remove_order(order_id)}
+
+    # ---------- API: журнал ----------
+
+    @app.get("/api/journal")
+    def journal_api(conn: Conn, user: User) -> dict[str, Any]:
+        return views.journal(conn, journal(conn, user).ops(), PORTFOLIO_ID)
+
+    @app.get("/api/journal/{op_id}/preview")
+    def journal_preview(op_id: int, conn: Conn, user: User, action: str = "cancel") -> dict[str, Any]:
+        j = journal(conn, user)
+        result = j.preview_cancel(op_id) if action == "cancel" else j.preview_restore(op_id)
+        return views.preview(conn, result, j.ops(), PORTFOLIO_ID)
+
+    @app.post("/api/journal/{op_id}/cancel")
+    def journal_cancel(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
+        journal(conn, user).cancel(op_id)
+        return {"ok": True}
+
+    @app.post("/api/journal/{op_id}/restore")
+    def journal_restore(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
+        journal(conn, user).restore(op_id)
+        return {"ok": True}
+
+    @app.post("/api/journal/{op_id}/edit")
+    def journal_edit(op_id: int, body: EditIn, conn: Conn, user: User) -> dict[str, Any]:
+        j = journal(conn, user)
+        current = j.current_op(op_id)
+        changes: dict[str, Any] = {}
+        if body.date is not None and body.date != current.op_date:
+            changes["op_date"] = body.date
+        if body.item is not None and body.item != current.market_hash_name:
+            check_item(conn, body.item)
+            changes["market_hash_name"] = body.item
+        if body.account_id is not None and body.account_id != current.account_id:
+            changes["account_id"] = body.account_id
+        if body.currency is not None and currency(body.currency) != current.currency:
+            changes["currency"] = currency(body.currency)
+        if body.quantity is not None and body.quantity != current.quantity:
+            changes["quantity"] = body.quantity
+        if body.price not in (None, "") and money(body.price) != current.price:
+            changes["price"] = money(body.price)
+        manual = rate(body.fx_rate)
+        if manual is not None and manual != current.fx_rate:
+            changes["fx_rate"] = manual
+        if body.comment is not None and body.comment.strip() != current.comment:
+            changes["comment"] = body.comment.strip()
+        if not changes:
+            raise ApiError("ничего не изменилось")
+        return {"op_id": j.edit(op_id, **changes)}
+
+    @app.post("/api/journal/{op_id}/delete")
+    def journal_delete(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
+        return {"op_id": journal(conn, user).delete(op_id)}
 
     # ---------- API: аккаунты ----------
 

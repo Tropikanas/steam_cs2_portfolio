@@ -23,6 +23,11 @@ class Settings:
     rate_items: tuple[str, ...]
     min_rate_item_usd: float
     min_rate_samples: int
+    # Токен бота — отдельным файлом (не в коде, не в базе и не в бэкапах); задаётся `steamfolio telegram setup`.
+    telegram_token_file: Path
+    # Ежедневные копии базы на сервере.
+    backup_dir: Path
+    backup_keep: int
 
 
 # Не брать предметы дороже ~$1800: у них часто нет лотов (потолок цены площадки).
@@ -37,8 +42,9 @@ DEFAULT_RATE_ITEMS = (
 
 def load_settings() -> Settings:
     rate_items = _env("RATE_ITEMS", "")
+    db_path = Path(_env("DB", "data/steamfolio.db"))
     return Settings(
-        db_path=Path(_env("DB", "data/steamfolio.db")),
+        db_path=db_path,
         request_delay=float(_env("REQUEST_DELAY", "2.5")),
         proxy=_env("PROXY", "") or None,
         nameids_url=_env(
@@ -50,4 +56,7 @@ def load_settings() -> Settings:
         rate_items=tuple(s.strip() for s in rate_items.split(";") if s.strip()) or DEFAULT_RATE_ITEMS,
         min_rate_item_usd=float(_env("MIN_RATE_ITEM_USD", "500")),
         min_rate_samples=int(_env("MIN_RATE_SAMPLES", "3")),
+        telegram_token_file=Path(_env("TELEGRAM_TOKEN_FILE", str(db_path.parent / "telegram_token"))),
+        backup_dir=Path(_env("BACKUP_DIR", str(db_path.parent / "backups"))),
+        backup_keep=int(_env("BACKUP_KEEP", "14")),
     )

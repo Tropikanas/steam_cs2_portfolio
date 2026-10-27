@@ -33,9 +33,10 @@ chmod 755 /usr/local/bin/steamfolio
 /usr/local/bin/steamfolio runs -n 1 >/dev/null
 
 install -m 644 "$SRC_DIR"/deploy/steamfolio-collect.service "$SRC_DIR"/deploy/steamfolio-collect.timer \
+    "$SRC_DIR"/deploy/steamfolio-backup.service "$SRC_DIR"/deploy/steamfolio-backup.timer \
     "$SRC_DIR"/deploy/steamfolio-web.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now steamfolio-collect.timer
+systemctl enable --now steamfolio-collect.timer steamfolio-backup.timer
 systemctl enable steamfolio-web.service
 systemctl restart steamfolio-web.service
 
@@ -64,4 +65,4 @@ ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
 
 echo "Готово: https://$DOMAIN"
-systemctl list-timers steamfolio-collect.timer --no-pager | head -2
+systemctl list-timers 'steamfolio-*' --no-pager | head -3

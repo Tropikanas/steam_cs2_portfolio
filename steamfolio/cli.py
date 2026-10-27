@@ -3,12 +3,13 @@ import getpass
 import logging
 import sqlite3
 import sys
-from datetime import datetime
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from steamfolio import auth, catalog, collector, db, history
-from steamfolio.ledger import Op
+from steamfolio import alerts, auth, backup, catalog, collector, db, history, telegram
+from steamfolio.ledger import Op, replay
 from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency, format_minor
 from steamfolio.market import Market, SteamHttp, listing_url, nameids
 from steamfolio.settings import Settings, load_settings
@@ -44,6 +45,11 @@ def cmd_collect(conn: sqlite3.Connection, settings: Settings, args: argparse.Nam
             log.warning("Не удалось загрузить историю цен: %r", e)
     finally:
         http.close()
+    try:
+        result = alerts.after_collect(conn, replay(ops), lambda text: telegram.notify(conn, settings, text))
+        log.info("Уведомления: %s", result)
+    except Exception as e:
+        log.warning("Не удалось отправить уведомления: %r", e)
     status = conn.execute("SELECT status FROM collector_runs WHERE id = ?", (run_id,)).fetchone()[0]
     # partial — не ошибка запуска: часть цен есть, проблемы видны в report.
     return 1 if status == "failed" else 0
@@ -184,6 +190,80 @@ def cmd_catalog(conn: sqlite3.Connection, settings: Settings, args: argparse.Nam
     return 0
 
 
+def cmd_telegram(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
+    if args.action == "status":
+        chat = telegram.owner_chat(conn)
+        print(f"Токен: {'задан' if telegram.read_token(settings) else 'не задан'} ({settings.telegram_token_file})")
+        print(f"Чат владельца: {chat['name'] if chat else 'не привязан'}")
+        return 0
+    if args.action == "test":
+        try:
+            sent = telegram.notify(conn, settings, "🔔 Тестовое сообщение «Портфолио Steam»: уведомления работают.")
+        except telegram.TelegramError as e:
+            print(f"Ошибка Telegram: {e}")
+            return 1
+        print("Отправлено" if sent else "Telegram не настроен: steamfolio telegram setup")
+        return 0 if sent else 1
+    return _telegram_setup(conn, settings)
+
+
+def _telegram_setup(conn: sqlite3.Connection, settings: Settings) -> int:
+    token = getpass.getpass("Токен бота от @BotFather (ввод не отображается): ").strip()
+    bot = telegram.Bot(token)
+    try:
+        try:
+            me = bot.me()
+        except telegram.TelegramError as e:
+            print(f"Токен не подошёл: {e}")
+            return 1
+        # Старые сообщения боту не считаются — ждём новое, написанное после запуска команды.
+        pending = bot.updates(timeout=0)
+        offset = pending[-1]["update_id"] + 1 if pending else None
+        print(f"Бот @{me['username']}. Напишите ему в Telegram любое сообщение — жду 2 минуты…")
+        chat = None
+        deadline = time.monotonic() + 120
+        while chat is None and time.monotonic() < deadline:
+            for update in bot.updates(offset, timeout=25):
+                offset = update["update_id"] + 1
+                message = update.get("message") or {}
+                if message.get("chat", {}).get("type") == "private":
+                    chat = message["chat"]
+                    break
+        if chat is None:
+            print("Сообщение не пришло. Запустите команду ещё раз.")
+            return 1
+        bot.updates(offset, timeout=0)  # отметить прочитанным
+        name = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")]))
+        if chat.get("username"):
+            name += f" (@{chat['username']})"
+        if input(f"Сообщение от {name}. Это вы? [д/н] ").strip().lower() not in ("д", "да", "y", "yes"):
+            print("Отменено.")
+            return 1
+        telegram.save_token(settings, token)
+        db.set_setting(conn, telegram.CHAT_KEY, {"id": chat["id"], "name": name})
+        bot.send(chat["id"], "✅ Бот «Портфолио Steam» подключён. Сюда будут приходить уведомления о ценах, "
+                             "предупреждения о сбоях и еженедельная резервная копия базы.")
+    finally:
+        bot.close()
+    print(f"Готово: уведомления будут приходить {name}. Токен сохранён в {settings.telegram_token_file}")
+    return 0
+
+
+def cmd_backup(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
+    now = datetime.now(UTC)
+    path = backup.local(conn, settings, now.astimezone(MSK).date())
+    print(f"Копия на сервере: {path}")
+    if args.send or (args.scheduled and backup.send_due(conn, now)):
+        try:
+            sent = backup.send(conn, settings, now)
+        except telegram.TelegramError as e:
+            print(f"Ошибка Telegram: {e}")
+            return 1
+        print("Копия отправлена в Telegram" if sent else "Telegram не настроен: steamfolio telegram setup")
+        return 0 if sent or not args.send else 1
+    return 0
+
+
 def cmd_demo(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
     from steamfolio import demo
 
@@ -234,6 +314,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name", nargs="?", help="название или часть названия")
     s.add_argument("type", nargs="?", help=f"для type: один из {', '.join(catalog.TYPES)}; пусто — автоматически")
     s.set_defaults(func=cmd_catalog)
+
+    s = sub.add_parser("telegram", help="бот для уведомлений")
+    s.add_argument("action", choices=["setup", "test", "status"],
+                   help="setup — ввести токен и привязать ваш чат; test — тестовое сообщение")
+    s.set_defaults(func=cmd_telegram)
+
+    s = sub.add_parser("backup", help="резервная копия базы")
+    s.add_argument("--send", action="store_true", help="сразу отправить копию в Telegram")
+    s.add_argument("--scheduled", action="store_true", help="для таймера: отправить в Telegram, если подошёл срок")
+    s.set_defaults(func=cmd_backup)
     return p
 
 

@@ -4,9 +4,11 @@
 Цены — целые числа в сотых долях валюты (центы, копейки).
 """
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 MIGRATIONS: list[str] = [
     # 1: сборщик цен и курсов
@@ -242,11 +244,48 @@ MIGRATIONS: list[str] = [
         error            TEXT
     );
     """,
+    # 5: настройки, которые меняются с сайта; уведомления в Telegram
+    """
+    -- Пороги уведомлений, чат Telegram, отметки о бэкапах. Значения — JSON.
+    CREATE TABLE app_settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    -- Отправленные уведомления о ценах — для антиспама и истории.
+    CREATE TABLE alerts_sent (
+        id               INTEGER PRIMARY KEY,
+        market_hash_name TEXT NOT NULL,
+        rule             TEXT NOT NULL,
+        sent_at          TEXT NOT NULL,
+        price_then       INTEGER NOT NULL,
+        price_now        INTEGER NOT NULL
+    );
+    CREATE INDEX alerts_sent_item ON alerts_sent(market_hash_name, rule, sent_at);
+    """,
 ]
 
 
 def utcnow() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default: Any = None) -> Any:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return default if row is None else json.loads(row[0])
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    with conn:
+        if value is None:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                """INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
+                (key, json.dumps(value, ensure_ascii=False), utcnow()),
+            )
 
 
 def connect(path: Path, check_same_thread: bool = True) -> sqlite3.Connection:

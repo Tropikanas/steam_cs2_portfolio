@@ -38,6 +38,15 @@ API: `/api/journal`, `/api/journal/{id}/preview|cancel|restore|edit|delete`.
 - `steamfolio/history.py` — оценка стоимости до первого планового сбора: история медианных цен продаж
   Steam (Market Beta, `QueryPriceHistory`), пересчёт в USD по курсу ЦБ на каждый день; загружается один раз на предмет.
 
+## Этап 6: Telegram и резервные копии
+
+- `steamfolio/alerts.py` — правила после каждого планового сбора (±50% за сутки, ×2 и ×3 за неделю по лучшему ордеру в USD),
+  антиспам, минимальная цена; предупреждение после 2 неудачных сборов подряд и сообщение о восстановлении.
+- `steamfolio/telegram.py` — бот только для исходящих сообщений владельцу; токен в `/var/lib/steamfolio/telegram_token` (600).
+- `steamfolio/backup.py` — ежедневная копия базы в `/var/lib/steamfolio/backups` (14 штук, таймер `steamfolio-backup`
+  в 01:00 МСК), по понедельникам — в Telegram (без сессий входа).
+- Вкладка «Настройки» (`/settings`): пороги уведомлений, тестовое сообщение, отправка копии.
+
 Команды на сервере:
 
 ```bash
@@ -47,6 +56,9 @@ steamfolio track list       # отслеживаемые предметы
 steamfolio demo             # демонстрация журнала и отката на временной базе
 steamfolio set-password     # пароль для входа на сайт (логин admin)
 steamfolio catalog type "Название" "Наклейки операций"   # переопределить тип предмета
+steamfolio telegram setup   # ввести токен бота и привязать свой чат
+steamfolio telegram test    # тестовое сообщение
+steamfolio backup --send    # копия базы сейчас и сразу в Telegram
 ```
 
 Установка или обновление на сервере (от root, из корня проекта): `bash deploy/install.sh`.

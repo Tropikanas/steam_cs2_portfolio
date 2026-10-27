@@ -192,6 +192,16 @@ dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .info { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 .error { background: var(--error-bg); color: var(--error); border-radius: 8px; padding: 8px 10px; font-size: 13px; white-space: pre-line; }
 .error ul { margin: 4px 0 0; padding-left: 18px; }
+
+/* настройки */
+.settings { max-width: 720px; }
+.settings p { margin: 0 0 10px; }
+.settings-form { display: flex; flex-direction: column; gap: 12px; }
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.settings ol { margin: 6px 0 10px; padding-left: 20px; }
+.settings code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+.topbar-right a.settings-link { color: var(--muted); text-decoration: none; }
+.topbar-right a.settings-link.active, .topbar-right a.settings-link:hover { color: var(--text); }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 .hidden { display: none !important; }
 

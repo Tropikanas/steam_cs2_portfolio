@@ -1,0 +1,10 @@
+[Unit]
+Description=Steam portfolio: daily database backup
+
+[Timer]
+# Каждый день в 01:00 по Москве; в понедельник копия ещё и уходит в Telegram.
+OnCalendar=*-*-* 01:00:00 Europe/Moscow
+Persistent=true
+
+[Install]
+WantedBy=timers.target

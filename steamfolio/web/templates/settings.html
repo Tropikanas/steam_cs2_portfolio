@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Настройки · Портфолио Steam{% endblock %}
+{% block content %}
+<section class="card panel settings">
+  <div class="panel-head"><h2>Уведомления о ценах</h2></div>
+  <p class="muted small">Проверяются после каждого обновления цен (раз в 6 часов) по предметам из портфеля.
+    Сравнивается лучший ордер на покупку в USD.</p>
+  <form id="alerts-form" class="settings-form" novalidate>
+    <label class="toggle"><input type="checkbox" name="enabled"> Присылать уведомления о ценах</label>
+    <div class="field-row">
+      <label class="field"><span>Резкое изменение за сутки, ±%</span>
+        <input name="day_pct" inputmode="decimal" required></label>
+      <label class="field"><span>Минимальная цена предмета, $</span>
+        <input name="min_price_usd" inputmode="decimal" required>
+        <small class="muted">Если цена и тогда, и сейчас ниже — правила не проверяются</small></label>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>Рост за неделю «×2», от +%</span>
+        <input name="week2_pct" inputmode="decimal" required></label>
+      <label class="field"><span>Рост за неделю «×3», от +%</span>
+        <input name="week3_pct" inputmode="decimal" required></label>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>Повтор по тому же предмету и правилу не чаще, ч</span>
+        <input name="cooldown_hours" inputmode="numeric" required></label>
+    </div>
+    <div class="error hidden" id="alerts-error"></div>
+    <div class="settings-actions"><button class="primary" type="submit">Сохранить</button>
+      <button type="button" id="alerts-reset">Вернуть по умолчанию</button></div>
+  </form>
+</section>
+
+<section class="card panel settings">
+  <div class="panel-head"><h2>Telegram</h2></div>
+  <div id="telegram"></div>
+</section>
+
+<section class="card panel settings">
+  <div class="panel-head"><h2>Резервные копии</h2></div>
+  <div id="backups"></div>
+</section>
+{% endblock %}
+{% block scripts %}<script>SF.settingsPage();</script>{% endblock %}

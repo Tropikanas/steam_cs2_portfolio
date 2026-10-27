@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Iterator
+from dataclasses import asdict
 from datetime import date as Date  # поле запроса называется date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -16,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from steamfolio import auth, catalog, collector, db, history, stats, views
+from steamfolio import alerts, auth, backup, catalog, collector, db, history, stats, telegram, views
 from steamfolio.clock import today_msk
 from steamfolio.currencies import USER_CURRENCIES, Currency
 from steamfolio.fx import FxResolver, FxUnavailable
@@ -144,6 +145,15 @@ class AccountIn(BaseModel):
     hidden: bool | None = None
 
 
+class AlertsIn(BaseModel):
+    enabled: bool
+    day_pct: float
+    week2_pct: float
+    week3_pct: float
+    min_price_usd: float
+    cooldown_hours: int
+
+
 def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_prices: bool = True) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="Портфолио Steam", docs_url=None, redoc_url=None, openapi_url=None)
@@ -266,6 +276,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     @app.get("/journal", response_class=HTMLResponse)
     def journal_page(request: Request, user: User):
         return templates.TemplateResponse(request, "journal.html", {"tab": "journal", "user": user})
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request, user: User):
+        return templates.TemplateResponse(request, "settings.html", {"tab": "settings", "user": user})
 
     # ---------- API: чтение ----------
 
@@ -442,6 +456,48 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     @app.post("/api/journal/{op_id}/delete")
     def journal_delete(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
         return {"op_id": journal(conn, user).delete(op_id)}
+
+    # ---------- API: настройки ----------
+
+    @app.get("/api/settings")
+    def settings_api(conn: Conn, user: User) -> dict[str, Any]:
+        chat = telegram.owner_chat(conn)
+        return {
+            "alerts": asdict(alerts.load_settings(conn)),
+            "defaults": asdict(alerts.AlertSettings()),
+            "telegram": {"token": telegram.read_token(settings) is not None, "chat": chat["name"] if chat else None},
+            "backups": {"local": backup.list_local(settings), "keep": settings.backup_keep,
+                        "sent_at": db.get_setting(conn, backup.SENT_KEY)},
+        }
+
+    @app.post("/api/settings/alerts")
+    def save_alerts(body: AlertsIn, conn: Conn, user: User) -> dict[str, Any]:
+        new = alerts.AlertSettings(**body.model_dump())
+        try:
+            alerts.save_settings(conn, new)
+        except ValueError as e:
+            raise ApiError(str(e)) from e
+        return asdict(new)
+
+    @app.post("/api/settings/telegram-test")
+    def telegram_test(conn: Conn, user: User) -> dict[str, Any]:
+        try:
+            sent = telegram.notify(conn, settings, "🔔 Тестовое сообщение с сайта «Портфолио Steam»: уведомления работают.")
+        except telegram.TelegramError as e:
+            raise ApiError(f"Telegram ответил ошибкой: {e}") from e
+        if not sent:
+            raise ApiError("бот не подключён: на сервере выполните steamfolio telegram setup")
+        return {"ok": True}
+
+    @app.post("/api/settings/backup-send")
+    def backup_send(conn: Conn, user: User) -> dict[str, Any]:
+        try:
+            sent = backup.send(conn, settings)
+        except telegram.TelegramError as e:
+            raise ApiError(f"Telegram ответил ошибкой: {e}") from e
+        if not sent:
+            raise ApiError("бот не подключён: на сервере выполните steamfolio telegram setup")
+        return {"ok": True}
 
     # ---------- API: аккаунты ----------
 

@@ -14,7 +14,8 @@ PASSWORD = "correct horse battery"
 
 @pytest.fixture
 def client(tmp_path):
-    settings = replace(load_settings(), db_path=tmp_path / "web.db")
+    settings = replace(load_settings(), db_path=tmp_path / "web.db", backup_dir=tmp_path / "backups",
+                       telegram_token_file=tmp_path / "telegram_token")
     conn = db.connect(settings.db_path)
     auth.set_password(conn, "admin", PASSWORD)
     with conn:
@@ -140,3 +141,17 @@ def test_money_parsing(client):
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
     r = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 1, "price": "1,234"})
     assert r.status_code == 400
+
+
+def test_settings_page_and_api(client):
+    assert client.get("/api/settings").status_code == 401
+    login(client)
+    assert "Уведомления о ценах" in client.get("/settings").text
+    s = client.get("/api/settings").json()
+    assert s["alerts"]["min_price_usd"] == 0.1 and s["telegram"] == {"token": False, "chat": None}
+    body = {**s["alerts"], "min_price_usd": 0.25, "day_pct": 40}
+    assert client.post("/api/settings/alerts", json=body).json()["min_price_usd"] == 0.25
+    assert client.get("/api/settings").json()["alerts"]["day_pct"] == 40
+    bad = client.post("/api/settings/alerts", json={**body, "week3_pct": 50})
+    assert bad.status_code == 400 and "×3" in bad.json()["error"]
+    assert client.post("/api/settings/telegram-test").status_code == 400  # бот не подключён

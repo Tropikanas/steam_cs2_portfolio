@@ -1054,5 +1054,87 @@ const SF = (() => {
     loadMeta().then(load).catch((e) => toast(e.message, true));
   }
 
-  return { portfolioPage, ordersPage, journalPage, statsPage };
+  // ---------- вкладка «Настройки» ----------
+
+  function settingsPage() {
+    const el = (id) => document.getElementById(id);
+    const form = el("alerts-form");
+    const errorBox = el("alerts-error");
+    const NUMBERS = ["day_pct", "min_price_usd", "week2_pct", "week3_pct", "cooldown_hours"];
+    let data = null;
+
+    const fill = (a) => {
+      form.elements.enabled.checked = a.enabled;
+      NUMBERS.forEach((k) => { form.elements[k].value = String(a[k]).replace(".", ","); });
+    };
+    const size = (n) => n < 1048576 ? `${num(n / 1024, 0)} КБ` : `${num(n / 1048576, 1)} МБ`;
+
+    async function action(btn, url, ok) {
+      btn.disabled = true;
+      try {
+        await api("POST", url);
+        toast(ok);
+        await load();
+      } catch (e) { toast(e.message, true); } finally { btn.disabled = false; }
+    }
+
+    function renderTelegram() {
+      const t = data.telegram;
+      const box = el("telegram");
+      if (t.chat) {
+        box.innerHTML = `<p>Бот подключён, сообщения приходят: <b>${esc(t.chat)}</b>.</p>
+          <div class="settings-actions"><button id="tg-test">Отправить тестовое сообщение</button></div>`;
+        el("tg-test").onclick = (e) => action(e.target, "/api/settings/telegram-test", "Тестовое сообщение отправлено");
+      } else {
+        box.innerHTML = `<p>Бот ещё не подключён${t.token ? " (токен задан, чат не привязан)" : ""}. Токен вводится только на сервере:</p>
+          <ol><li>Подключитесь к серверу по SSH и выполните <code>steamfolio telegram setup</code>.</li>
+          <li>Вставьте токен бота от @BotFather — при вводе он не отображается.</li>
+          <li>Напишите боту в Telegram любое сообщение и подтвердите, что это вы.</li></ol>`;
+      }
+    }
+
+    function renderBackups() {
+      const b = data.backups;
+      const last = b.local[0];
+      el("backups").innerHTML = `<p>Каждый день в 01:00 МСК база копируется на сервер, хранятся последние ${b.keep} копий.
+          Сейчас копий: ${b.local.length}${last ? `, последняя — ${esc(last.name)} (${size(last.size)})` : ""}.</p>
+        <p>По понедельникам в 01:00 МСК сжатая копия уходит в Telegram (без сессий входа на сайт).
+          Последняя отправка: ${b.sent_at ? dateTime(b.sent_at) : "ещё не было"}.</p>
+        <div class="settings-actions"><button id="backup-send" ${data.telegram.chat ? "" : "disabled"}>Отправить копию в Telegram сейчас</button></div>`;
+      el("backup-send").onclick = (e) => action(e.target, "/api/settings/backup-send", "Копия отправлена в Telegram");
+    }
+
+    async function load() {
+      data = await api("GET", "/api/settings");
+      fill(data.alerts);
+      renderTelegram();
+      renderBackups();
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.classList.add("hidden");
+      const body = { enabled: form.elements.enabled.checked };
+      for (const k of NUMBERS) {
+        body[k] = parseNum(form.elements[k].value);
+        if (body[k] == null) {
+          errorBox.textContent = "Заполните все поля числами";
+          errorBox.classList.remove("hidden");
+          return;
+        }
+      }
+      try {
+        data.alerts = await api("POST", "/api/settings/alerts", body);
+        fill(data.alerts);
+        toast("Настройки уведомлений сохранены");
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+      }
+    });
+    el("alerts-reset").onclick = () => { fill(data.defaults); toast("Значения по умолчанию подставлены — нажмите «Сохранить»"); };
+    loadMeta().then(load).catch((e) => toast(e.message, true));
+  }
+
+  return { portfolioPage, ordersPage, journalPage, statsPage, settingsPage };
 })();

@@ -143,6 +143,18 @@ def test_money_parsing(client):
     assert r.status_code == 400
 
 
+def test_export_endpoint(client):
+    assert client.post("/api/export", json={}).status_code == 401
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD", "quantity": 2, "price": "0,50"})
+    r = client.post("/api/export", json={})
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert r.headers["content-disposition"].startswith('attachment; filename="portfolio-')
+    filtered = client.post("/api/export", json={"open": [["Kilowatt Case", acc, "USD"]], "closed": []})
+    assert filtered.status_code == 200
+
+
 def test_settings_page_and_api(client):
     assert client.get("/api/settings").status_code == 401
     login(client)

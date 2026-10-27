@@ -223,6 +223,37 @@ const SF = (() => {
     });
   }
 
+  // Вопрос с несколькими ответами; null — закрыли без выбора.
+  function choiceDialog(title, html, choices) {
+    return new Promise((resolve) => {
+      const dlg = document.createElement("dialog");
+      dlg.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2>${html}
+        <div class="dialog-actions"><button value="">Отмена</button>${choices.map((c, i) =>
+          `<button value="${i}" class="${c.primary ? "primary" : ""}">${esc(c.label)}</button>`).join("")}</div></form>`;
+      document.body.append(dlg);
+      dlg.addEventListener("close", () => {
+        dlg.remove();
+        resolve(dlg.returnValue === "" ? null : choices[+dlg.returnValue].value);
+      });
+      dlg.showModal();
+    });
+  }
+
+  async function download(url, body, fallbackName) {
+    const res = await fetch(url, { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (res.status === 401) { location.href = "/login"; return; }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Ошибка ${res.status}`);
+    const name = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await res.blob());
+    link.download = name ? name[1] : fallbackName;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  }
+
   // Подсказки предметов с иконками.
   function itemSuggest(wrap, onPick) {
     const input = wrap.querySelector("input");
@@ -569,8 +600,33 @@ const SF = (() => {
       });
     }
 
+    // Выгрузка в Excel: портфель всегда по аккаунтам; фильтры таблицы — по выбору пользователя.
+    async function exportExcel(btn) {
+      const cols = columns();
+      const active = cols.filter((c) => c.filter && (filters[c.id] || "").trim());
+      let body = {};
+      if (active.length) {
+        const list = active.map((c) => `<li>${esc(c.title)}: <b>${esc(filters[c.id].trim())}</b></li>`).join("");
+        const useFilters = await choiceDialog("Выгрузка в Excel", `<p>Учитывать выставленные фильтры?</p><ul>${list}</ul>
+          <p class="muted small">Фильтры применяются к листам «Портфель» и «Закрытые позиции». Ордера и журнал выгружаются полностью.</p>`,
+          [{ label: "Нет, выгрузить всё", value: false }, { label: "Да, с фильтрами", value: true, primary: true }]);
+        if (useFilters === null) return;
+        if (useFilters) {
+          const pass = (r) => active.every((c) => matches(filters[c.id], c, r));
+          const keys = (rows) => rows.filter(pass).map((r) => [r.item, r.account_id, r.currency]);
+          const [open, shut] = await Promise.all([api("GET", "/api/portfolio?closed=false"), api("GET", "/api/portfolio?closed=true")]);
+          body = { open: keys(open.rows), closed: keys(shut.rows) };
+        }
+      }
+      btn.disabled = true;
+      try {
+        await download("/api/export", body, "portfolio.xlsx");
+      } catch (e) { toast(e.message, true); } finally { btn.disabled = false; }
+    }
+
     collapse.addEventListener("change", () => { store.set("collapse", collapse.checked ? "1" : "0"); reload(); });
     closed.addEventListener("change", reload);
+    document.getElementById("btn-excel").onclick = (e) => exportExcel(e.currentTarget);
     document.getElementById("btn-buy").onclick = () => requireAccounts(buyForm);
     document.getElementById("btn-accounts").onclick = () => accountsDialog(reload);
     loadMeta().then(reload).catch((e) => toast(e.message, true));

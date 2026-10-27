@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from steamfolio import alerts, auth, backup, catalog, collector, db, history, stats, telegram, views
+from steamfolio import alerts, auth, backup, catalog, collector, db, export, history, stats, telegram, views
 from steamfolio.clock import today_msk
 from steamfolio.currencies import USER_CURRENCIES, Currency
 from steamfolio.fx import FxResolver, FxUnavailable
@@ -143,6 +143,12 @@ class ItemTypeIn(BaseModel):
 class AccountIn(BaseModel):
     name: str | None = None
     hidden: bool | None = None
+
+
+class ExportIn(BaseModel):
+    # Строки портфеля после фильтров на сайте: [предмет, id аккаунта, валюта]; None — выгрузить всё.
+    open: list[tuple[str, int, str]] | None = None
+    closed: list[tuple[str, int, str]] | None = None
 
 
 class AlertsIn(BaseModel):
@@ -353,6 +359,18 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
                     (PORTFOLIO_ID, body.item, body.account_id, int(cur)),
                 )
         return {"ok": True}
+
+    @app.post("/api/export")
+    def export_xlsx(body: ExportIn, conn: Conn, user: User) -> Response:
+        j = journal(conn, user)
+        ops = j.ops()
+        only = None
+        if body.open is not None or body.closed is not None:
+            only = {"open": set(body.open or []), "closed": set(body.closed or [])}
+        content = export.build(conn, replay(ops), ops, PORTFOLIO_ID, only)
+        name = f"portfolio-{today_msk().isoformat()}.xlsx"
+        return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     # ---------- API: ордера ----------
 

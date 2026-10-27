@@ -47,6 +47,30 @@ API: `/api/journal`, `/api/journal/{id}/preview|cancel|restore|edit|delete`.
   в 01:00 МСК), по понедельникам — в Telegram (без сессий входа).
 - Вкладка «Настройки» (`/settings`): пороги уведомлений, тестовое сообщение, отправка копии.
 
+## Этап 7: сервер
+
+- SSH только по ключу (`deploy/sshd-steamfolio.conf` → `/etc/ssh/sshd_config.d/00-steamfolio.conf`), fail2ban для SSH.
+- Открыты только 22, 80, 443 (ufw). Службы поднимаются сами после сбоя (`Restart=always`) и перезагрузки.
+- `steamfolio healthcheck` — таймер `steamfolio-health` раз в 15 минут открывает сайт; после 2 неудач подряд — сообщение в Telegram.
+
+### Восстановление базы из копии
+
+Копии: на сервере `/var/lib/steamfolio/backups/steamfolio-ГГГГ-ММ-ДД.db.gz` (14 последних дней), в Telegram — по понедельникам.
+В копии из Telegram нет сессий входа — после восстановления нужно просто войти заново.
+
+```bash
+systemctl stop steamfolio-web steamfolio-collect.timer steamfolio-backup.timer steamfolio-health.timer
+cp /var/lib/steamfolio/steamfolio.db /var/lib/steamfolio/steamfolio.broken.db   # на всякий случай
+rm -f /var/lib/steamfolio/steamfolio.db-wal /var/lib/steamfolio/steamfolio.db-shm
+gunzip -c /var/lib/steamfolio/backups/steamfolio-2026-11-02.db.gz > /var/lib/steamfolio/steamfolio.db
+chown steamfolio:steamfolio /var/lib/steamfolio/steamfolio.db && chmod 600 /var/lib/steamfolio/steamfolio.db
+systemctl start steamfolio-web steamfolio-collect.timer steamfolio-backup.timer steamfolio-health.timer
+```
+
+Файл из Telegram сначала копируется на сервер: `scp steamfolio-2026-11-02.db.gz root@СЕРВЕР:/var/lib/steamfolio/backups/`.
+На новом сервере: склонировать репозиторий, `bash deploy/install.sh`, восстановить базу как выше,
+`steamfolio set-password` и `steamfolio telegram setup` (токен бота в копию не входит).
+
 Команды на сервере:
 
 ```bash
@@ -59,6 +83,8 @@ steamfolio catalog type "Название" "Наклейки операций"  
 steamfolio telegram setup   # ввести токен бота и привязать свой чат
 steamfolio telegram test    # тестовое сообщение
 steamfolio backup --send    # копия базы сейчас и сразу в Telegram
+steamfolio healthcheck      # открывается ли сайт
+fail2ban-client status sshd # заблокированные адреса
 ```
 
 Установка или обновление на сервере (от root, из корня проекта): `bash deploy/install.sh`.

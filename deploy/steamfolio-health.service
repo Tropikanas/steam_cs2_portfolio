@@ -1,0 +1,20 @@
+[Unit]
+Description=Steam portfolio: check that the site responds
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=steamfolio
+Group=steamfolio
+EnvironmentFile=/etc/steamfolio/steamfolio.env
+ExecStart=/opt/steamfolio/venv/bin/steamfolio healthcheck
+# Код 1 — «сайт не открывается», это результат проверки, а не сбой службы.
+SuccessExitStatus=1
+TimeoutStartSec=2min
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/steamfolio

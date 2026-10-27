@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from steamfolio import alerts, auth, backup, catalog, collector, db, history, telegram
+from steamfolio import alerts, auth, backup, catalog, collector, db, health, history, telegram
 from steamfolio.ledger import Op, replay
 from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency, format_minor
 from steamfolio.market import Market, SteamHttp, listing_url, nameids
@@ -264,6 +264,13 @@ def cmd_backup(conn: sqlite3.Connection, settings: Settings, args: argparse.Name
     return 0
 
 
+def cmd_healthcheck(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
+    error = health.probe(settings.site_url)
+    state = health.update(conn, settings.site_url, error, lambda text: telegram.notify(conn, settings, text))
+    print(f"{settings.site_url}: {'работает' if error is None else 'ОШИБКА ' + error} (неудач подряд: {state['fails']})")
+    return 0 if error is None else 1
+
+
 def cmd_demo(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
     from steamfolio import demo
 
@@ -324,6 +331,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--send", action="store_true", help="сразу отправить копию в Telegram")
     s.add_argument("--scheduled", action="store_true", help="для таймера: отправить в Telegram, если подошёл срок")
     s.set_defaults(func=cmd_backup)
+
+    s = sub.add_parser("healthcheck", help="проверить, что сайт открывается (таймер раз в 15 минут)")
+    s.set_defaults(func=cmd_healthcheck)
     return p
 
 

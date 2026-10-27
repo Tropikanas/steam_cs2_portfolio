@@ -7,7 +7,7 @@ APP_DIR=/opt/steamfolio
 SRC_DIR=$(cd "$(dirname "$0")/.." && pwd)
 ENV_FILE=/etc/steamfolio/steamfolio.env
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.12-venv sqlite3 caddy ufw >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.12-venv sqlite3 caddy ufw fail2ban >/dev/null
 
 id steamfolio >/dev/null 2>&1 || useradd --system --home-dir /var/lib/steamfolio --shell /usr/sbin/nologin steamfolio
 install -d -o steamfolio -g steamfolio -m 750 /var/lib/steamfolio
@@ -34,9 +34,10 @@ chmod 755 /usr/local/bin/steamfolio
 
 install -m 644 "$SRC_DIR"/deploy/steamfolio-collect.service "$SRC_DIR"/deploy/steamfolio-collect.timer \
     "$SRC_DIR"/deploy/steamfolio-backup.service "$SRC_DIR"/deploy/steamfolio-backup.timer \
+    "$SRC_DIR"/deploy/steamfolio-health.service "$SRC_DIR"/deploy/steamfolio-health.timer \
     "$SRC_DIR"/deploy/steamfolio-web.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now steamfolio-collect.timer steamfolio-backup.timer
+systemctl enable --now steamfolio-collect.timer steamfolio-backup.timer steamfolio-health.timer
 systemctl enable steamfolio-web.service
 systemctl restart steamfolio-web.service
 
@@ -63,6 +64,17 @@ ufw allow 22/tcp >/dev/null
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
+
+# SSH: только по ключу (если ключ уже добавлен — иначе можно потерять доступ к серверу).
+if [ -s /root/.ssh/authorized_keys ]; then
+    install -m 644 "$SRC_DIR/deploy/sshd-steamfolio.conf" /etc/ssh/sshd_config.d/00-steamfolio.conf
+    sshd -t && systemctl reload ssh
+else
+    echo "ВНИМАНИЕ: нет ключей в /root/.ssh/authorized_keys — вход по паролю оставлен включённым"
+fi
+install -m 644 "$SRC_DIR/deploy/fail2ban-sshd.local" /etc/fail2ban/jail.d/sshd.local
+systemctl enable fail2ban >/dev/null 2>&1
+systemctl restart fail2ban
 
 echo "Готово: https://$DOMAIN"
 systemctl list-timers 'steamfolio-*' --no-pager | head -3

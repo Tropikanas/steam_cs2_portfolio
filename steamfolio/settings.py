@@ -28,6 +28,8 @@ class Settings:
     # Ежедневные копии базы на сервере.
     backup_dir: Path
     backup_keep: int
+    # Адрес, который проверяет `steamfolio healthcheck`.
+    site_url: str
 
 
 # Не брать предметы дороже ~$1800: у них часто нет лотов (потолок цены площадки).
@@ -59,4 +61,5 @@ def load_settings() -> Settings:
         telegram_token_file=Path(_env("TELEGRAM_TOKEN_FILE", str(db_path.parent / "telegram_token"))),
         backup_dir=Path(_env("BACKUP_DIR", str(db_path.parent / "backups"))),
         backup_keep=int(_env("BACKUP_KEEP", "14")),
+        site_url=f"https://{domain}/login" if (domain := _env("DOMAIN", "")) else "http://127.0.0.1:8000/login",
     )

@@ -1,0 +1,18 @@
+[Unit]
+Description=Steam portfolio: prices and Steam exchange rates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=steamfolio
+Group=steamfolio
+EnvironmentFile=/etc/steamfolio/steamfolio.env
+ExecStart=/opt/steamfolio/venv/bin/steamfolio collect
+TimeoutStartSec=2h
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/steamfolio

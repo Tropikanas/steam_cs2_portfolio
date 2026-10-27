@@ -1,0 +1,22 @@
+# Тестовые предметы этапа 1: по 2–5 каждого типа, дешёвые и дорогие.
+# Загружаются командой: steamfolio track add --file config/test_items.txt --comment Тест
+Kilowatt Case
+Gallery Case
+Fever Case
+Dreams & Nightmares Case
+Revolution Case
+Austin 2025 Legends Sticker Capsule
+Copenhagen 2024 Legends Sticker Capsule
+Sticker | Vitality (Holo) | Austin 2025
+Sticker | Natus Vincere (Holo) | Copenhagen 2024
+Sticker | Crown (Foil)
+Sticker | Hello AWP
+Patch | Phoenix
+Sir Bloody Miami Darryl | The Professionals
+Number K | The Professionals
+AK-47 | Redline (Field-Tested)
+AWP | Asiimov (Field-Tested)
+M4A1-S | Printstream (Field-Tested)
+Desert Eagle | Printstream (Field-Tested)
+★ Karambit | Doppler (Factory New)
+★ Sport Gloves | Vice (Field-Tested)

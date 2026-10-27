@@ -1,0 +1,11 @@
+[Unit]
+Description=Steam portfolio: collect prices every 6 hours
+
+[Timer]
+# 03:00, 09:00, 15:00, 21:00 по Москве
+OnCalendar=*-*-* 00/6:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

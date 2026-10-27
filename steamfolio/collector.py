@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency
 from steamfolio.db import utcnow
+from steamfolio.ledger import Op, replay
 from steamfolio.market import Market, MarketError
 from steamfolio.rates import compute_rates, convert
 from steamfolio.settings import Settings
@@ -23,10 +24,20 @@ class Target:
 
 
 def targets(conn: sqlite3.Connection) -> list[Target]:
-    # Этап 1: только tracked_items, во всех валютах пользователя.
-    # На этапе 2 сюда добавятся предметы портфеля и ордеров в валютах их строк (+ USD).
-    rows = conn.execute("SELECT market_hash_name FROM tracked_items ORDER BY rowid").fetchall()
-    return [Target(row[0], USER_CURRENCIES) for row in rows]
+    """Предметы портфеля и ордеров — в валютах их строк и в USD; tracked_items — во всех валютах."""
+    needed: dict[str, set[Currency]] = {}
+    for (portfolio_id,) in conn.execute("SELECT id FROM portfolios").fetchall():
+        rows = conn.execute("SELECT * FROM operations WHERE portfolio_id = ?", (portfolio_id,)).fetchall()
+        ledger = replay([Op.from_row(r) for r in rows])
+        for item, currency in [(p.key.market_hash_name, p.key.currency) for p in ledger.open_positions] + [
+            (o.market_hash_name, o.currency) for o in ledger.open_orders
+        ]:
+            needed.setdefault(item, set()).update((currency, Currency.USD))
+    for (item,) in conn.execute("SELECT market_hash_name FROM tracked_items ORDER BY rowid").fetchall():
+        needed.setdefault(item, set()).update(USER_CURRENCIES)
+    return [
+        Target(item, tuple(c for c in USER_CURRENCIES if c in currencies)) for item, currencies in needed.items()
+    ]
 
 
 def latest_rates(conn: sqlite3.Connection) -> dict[Currency, float]:

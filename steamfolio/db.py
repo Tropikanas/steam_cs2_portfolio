@@ -72,6 +72,83 @@ MIGRATIONS: list[str] = [
         added_at         TEXT NOT NULL
     );
     """,
+    # 2: пользователи, портфели, аккаунты, журнал операций
+    """
+    CREATE TABLE users (
+        id            INTEGER PRIMARY KEY,
+        login         TEXT NOT NULL UNIQUE,
+        password_hash TEXT,
+        created_at    TEXT NOT NULL
+    );
+
+    CREATE TABLE portfolios (
+        id         INTEGER PRIMARY KEY,
+        user_id    INTEGER NOT NULL REFERENCES users(id),
+        name       TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE accounts (
+        id           INTEGER PRIMARY KEY,
+        portfolio_id INTEGER NOT NULL REFERENCES portfolios(id),
+        name         TEXT NOT NULL,
+        hidden       INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        UNIQUE (portfolio_id, name)
+    );
+
+    -- Журнал — единственный источник данных: портфель, ордера и прибыль пересчитываются из него.
+    -- order_id  — ссылка на операцию order_placed (для операций с ордером);
+    -- target_id — ссылка на изменяемую или удаляемую операцию (для *_edited, *_deleted);
+    -- payload   — для изменений: {"before": {...}, "after": {...}}.
+    -- fx_rate   — сколько единиц валюты операции за 1 USD на дату операции (текстом, без потери точности).
+    CREATE TABLE operations (
+        id               INTEGER PRIMARY KEY,
+        portfolio_id     INTEGER NOT NULL REFERENCES portfolios(id),
+        user_id          INTEGER REFERENCES users(id),
+        kind             TEXT NOT NULL CHECK (kind IN (
+                             'buy', 'sell',
+                             'order_placed', 'order_changed', 'order_filled', 'order_removed',
+                             'buy_edited', 'buy_deleted', 'sell_edited', 'sell_deleted')),
+        op_date          TEXT NOT NULL,
+        created_at       TEXT NOT NULL,
+        market_hash_name TEXT,
+        account_id       INTEGER REFERENCES accounts(id),
+        currency         INTEGER,
+        quantity         INTEGER,
+        price            INTEGER,
+        fx_rate          TEXT,
+        fx_source        TEXT CHECK (fx_source IN ('usd', 'steam', 'cbr', 'manual')),
+        order_id         INTEGER REFERENCES operations(id),
+        target_id        INTEGER REFERENCES operations(id),
+        payload          TEXT,
+        comment          TEXT NOT NULL DEFAULT '',
+        cancelled_at     TEXT
+    );
+    CREATE INDEX operations_portfolio ON operations(portfolio_id, op_date);
+
+    -- История откатов и их отмен.
+    CREATE TABLE operation_cancellations (
+        id           INTEGER PRIMARY KEY,
+        operation_id INTEGER NOT NULL REFERENCES operations(id),
+        action       TEXT NOT NULL CHECK (action IN ('cancel', 'restore')),
+        user_id      INTEGER REFERENCES users(id),
+        at           TEXT NOT NULL
+    );
+
+    -- Курсы ЦБ РФ, пересчитанные к USD (единиц валюты за 1 USD), — для дат до начала истории Steam.
+    CREATE TABLE fx_cbr (
+        date     TEXT NOT NULL,
+        currency INTEGER NOT NULL,
+        rate     TEXT NOT NULL,
+        PRIMARY KEY (date, currency)
+    );
+
+    -- Пароль задаётся на этапе 3.
+    INSERT INTO users (id, login, created_at) VALUES (1, 'admin', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'));
+    INSERT INTO portfolios (id, user_id, name, created_at)
+        VALUES (1, 1, 'Основной', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'));
+    """,
 ]
 
 

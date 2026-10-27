@@ -144,6 +144,12 @@ def cmd_nameid(conn: sqlite3.Connection, settings: Settings, args: argparse.Name
     return 0
 
 
+def cmd_demo(conn: sqlite3.Connection, settings: Settings, args: argparse.Namespace) -> int:
+    from steamfolio import demo
+
+    return demo.run(settings.db_path)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="steamfolio", description="Портфолио Steam")
     sub = p.add_subparsers(dest="command", required=True)
@@ -175,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     ns.add_argument("name")
     ns.add_argument("item_nameid", type=int)
     s.set_defaults(func=cmd_nameid)
+
+    s = sub.add_parser("demo", help="демонстрация журнала и отката на временной базе")
+    s.set_defaults(func=cmd_demo)
     return p
 
 

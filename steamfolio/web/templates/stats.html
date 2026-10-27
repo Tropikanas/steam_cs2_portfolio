@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Статистика · Портфолио Steam{% endblock %}
+{% block content %}
+<section class="summary" id="summary-now"></section>
+<section class="summary" id="summary-all"></section>
+
+<section class="card panel">
+  <div class="panel-head">
+    <h2>Стоимость портфеля и вложения</h2>
+    <div class="segmented" id="period">
+      <button data-days="7">Неделя</button><button data-days="30">Месяц</button><button data-days="365">Год</button><button data-days="0">Всё время</button>
+    </div>
+  </div>
+  <div class="chart-box"><canvas id="line" aria-label="График стоимости портфеля и вложений"></canvas></div>
+  <p class="muted small" id="line-note"></p>
+</section>
+
+<section class="card panel">
+  <div class="panel-head">
+    <h2 id="pie-title">По типам предметов</h2>
+    <button id="pie-back" class="hidden">← Назад к типам</button>
+  </div>
+  <div class="pie-grid">
+    <div class="pie-box"><canvas id="pie" aria-label="Круговая диаграмма по типам"></canvas></div>
+    <div class="table-wrap" id="pie-table"></div>
+  </div>
+</section>
+
+<section class="card panel">
+  <div class="panel-head">
+    <h2>Лучшие операции</h2>
+    <div class="segmented" id="best-sort">
+      <button data-sort="pct">По %</button><button data-sort="usd">По сумме</button>
+    </div>
+    <label class="toggle small"><input type="checkbox" id="best-all"> Все продажи</label>
+  </div>
+  <div class="table-wrap" id="best"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/chart.umd.min.js?v=4.4.1"></script>
+<script>SF.statsPage();</script>
+{% endblock %}

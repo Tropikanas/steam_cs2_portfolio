@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from steamfolio import auth, catalog, collector, db
+from steamfolio import auth, catalog, collector, db, history
+from steamfolio.ledger import Op
 from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency, format_minor
 from steamfolio.market import Market, SteamHttp, listing_url, nameids
 from steamfolio.settings import Settings, load_settings
@@ -36,6 +37,11 @@ def cmd_collect(conn: sqlite3.Connection, settings: Settings, args: argparse.Nam
     http = SteamHttp(settings.request_delay, settings.proxy)
     try:
         run_id = collector.run(conn, Market(conn, http), settings)
+        ops = [Op.from_row(r) for r in conn.execute("SELECT * FROM operations ORDER BY id")]
+        try:
+            history.backfill(conn, http, ops)
+        except Exception as e:  # оценка прошлого не должна ронять сбор цен
+            log.warning("Не удалось загрузить историю цен: %r", e)
     finally:
         http.close()
     status = conn.execute("SELECT status FROM collector_runs WHERE id = ?", (run_id,)).fetchone()[0]

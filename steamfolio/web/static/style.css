@@ -155,6 +155,28 @@ tr.flash td { animation: flash 2s ease-out; }
 .preview-list { margin: 0; padding-left: 18px; font-size: 13px; }
 .preview-list li + li { margin-top: 4px; }
 
+/* статистика */
+.panel { margin-bottom: 14px; }
+.panel h2 { font-size: 15px; margin: 0; }
+.panel-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.panel-head h2 { margin-right: auto; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.segmented button { border: 0; border-radius: 0; padding: 4px 10px; font-size: 13px; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active { background: var(--accent); color: var(--accent-text); }
+.chart-box { position: relative; height: 320px; }
+.pie-grid { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 16px; align-items: start; }
+.pie-box { position: relative; height: 300px; }
+.pie-grid .table-wrap { box-shadow: none; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+tr.clickable { cursor: pointer; }
+td select { padding: 2px 4px; font-size: 12px; }
+@media (max-width: 760px) {
+  .pie-grid { grid-template-columns: 1fr; }
+  .chart-box { height: 260px; }
+  .pie-box { height: 260px; }
+}
+
 /* диалоги */
 dialog {
   border: 1px solid var(--border); border-radius: 12px; padding: 0; background: var(--surface); color: var(--text);

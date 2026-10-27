@@ -206,18 +206,41 @@ def effective_ops(ops: list[Op]) -> list[Op]:
 
 
 def replay(ops: list[Op]) -> Ledger:
+    ledger, timeline = _prepare(ops)
+    for op in timeline:
+        _apply(ledger, op)
+    return ledger
+
+
+def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, tuple[int, Decimal]]]]:
+    """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость в USD)})]."""
+    ledger, timeline = _prepare(ops)
+    result: list[tuple[date, dict[RowKey, tuple[int, Decimal]]]] = []
+    for op in timeline:
+        _apply(ledger, op)
+        state = {k: (p.quantity, p.cost_usd) for k, p in ledger.positions.items() if p.quantity > 0}
+        if result and result[-1][0] == op.op_date:
+            result[-1] = (op.op_date, state)
+        else:
+            result.append((op.op_date, state))
+    return result
+
+
+def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:
     ledger = Ledger()
     current = effective_ops(ops)
     valid_fills = _replay_orders(ledger, sorted((op for op in current if op.kind.startswith("order_")), key=lambda o: o.entry_key))
     timeline = [op for op in current if op.kind in ("buy", "sell", "transfer") or op.id in valid_fills]
-    for op in sorted(timeline, key=lambda o: o.sort_key):
-        if op.kind == "sell":
-            _sell(ledger, op)
-        elif op.kind == "transfer":
-            _transfer(ledger, op)
-        else:
-            _buy(ledger, op)
-    return ledger
+    return ledger, sorted(timeline, key=lambda o: o.sort_key)
+
+
+def _apply(ledger: Ledger, op: Op) -> None:
+    if op.kind == "sell":
+        _sell(ledger, op)
+    elif op.kind == "transfer":
+        _transfer(ledger, op)
+    else:
+        _buy(ledger, op)
 
 
 def _replay_orders(ledger: Ledger, ops: list[Op]) -> set[int]:

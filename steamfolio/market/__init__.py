@@ -10,10 +10,10 @@ import sqlite3
 from steamfolio.currencies import Currency
 from steamfolio.market.http import SteamHttp
 from steamfolio.market.nameids import get_nameid
-from steamfolio.market.sources import fetch_histogram, fetch_orderbook
+from steamfolio.market.sources import fetch_histogram, fetch_orderbook, fetch_price_history
 from steamfolio.market.types import MarketError, Quote
 
-__all__ = ["Market", "MarketError", "Quote", "SteamHttp", "listing_url"]
+__all__ = ["Market", "MarketError", "Quote", "SteamHttp", "fetch_price_history", "listing_url"]
 
 log = logging.getLogger(__name__)
 

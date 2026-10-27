@@ -223,6 +223,25 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX login_attempts_at ON login_attempts(at);
     """,
+    # 4: история цен Steam для оценки стоимости портфеля до начала собственных снимков
+    """
+    -- Медианная цена продажи за день, пересчитанная в центы USD по курсу ЦБ на тот день.
+    CREATE TABLE price_history (
+        market_hash_name TEXT NOT NULL,
+        day              TEXT NOT NULL,
+        price_usd        INTEGER NOT NULL,
+        volume           INTEGER,
+        PRIMARY KEY (market_hash_name, day)
+    );
+
+    -- Для каких предметов история уже загружена (загружается один раз).
+    CREATE TABLE price_history_fetched (
+        market_hash_name TEXT PRIMARY KEY,
+        fetched_at       TEXT NOT NULL,
+        points           INTEGER NOT NULL,
+        error            TEXT
+    );
+    """,
 ]
 
 

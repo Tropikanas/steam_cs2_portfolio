@@ -16,11 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from steamfolio import auth, catalog, collector, db, views
+from steamfolio import auth, catalog, collector, db, history, stats, views
 from steamfolio.clock import today_msk
 from steamfolio.currencies import USER_CURRENCIES, Currency
 from steamfolio.fx import FxResolver, FxUnavailable
 from steamfolio.journal import Journal, JournalError, create_account
+from steamfolio.ledger import Op, replay
 from steamfolio.market import Market, SteamHttp
 from steamfolio.settings import Settings, load_settings
 
@@ -133,6 +134,11 @@ class EditIn(BaseModel):
     comment: str | None = None
 
 
+class ItemTypeIn(BaseModel):
+    item: str
+    type: str | None = None  # None — вернуть автоматический тип
+
+
 class AccountIn(BaseModel):
     name: str | None = None
     hidden: bool | None = None
@@ -173,11 +179,13 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
             conn = db.connect(settings.db_path)
             try:
                 target = collector.missing_prices(conn, item, cur)
-                if target is None:
-                    return
                 http = SteamHttp(settings.request_delay, settings.proxy)
                 try:
-                    collector.run_on_demand(conn, Market(conn, http), [target])
+                    if target is not None:
+                        collector.run_on_demand(conn, Market(conn, http), [target])
+                    # Покупка задним числом — сразу подтягиваем историю для оценки стоимости в прошлом.
+                    ops = [Op.from_row(r) for r in conn.execute("SELECT * FROM operations ORDER BY id")]
+                    history.backfill(conn, http, ops, limit=3)
                 finally:
                     http.close()
             except Exception:
@@ -250,6 +258,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     @app.get("/orders", response_class=HTMLResponse)
     def orders_page(request: Request, user: User):
         return templates.TemplateResponse(request, "orders.html", {"tab": "orders", "user": user})
+
+    @app.get("/stats", response_class=HTMLResponse)
+    def stats_page(request: Request, user: User):
+        return templates.TemplateResponse(request, "stats.html", {"tab": "stats", "user": user})
 
     @app.get("/journal", response_class=HTMLResponse)
     def journal_page(request: Request, user: User):
@@ -353,6 +365,30 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     @app.post("/api/orders/{order_id}/remove")
     def remove_order(order_id: int, conn: Conn, user: User) -> dict[str, Any]:
         return {"op_id": journal(conn, user).remove_order(order_id)}
+
+    # ---------- API: статистика ----------
+
+    @app.get("/api/stats")
+    def stats_api(conn: Conn, user: User) -> dict[str, Any]:
+        j = journal(conn, user)
+        ops = j.ops()
+        ledger = replay(ops)
+        return {
+            "summary": stats.summary(conn, ledger, PORTFOLIO_ID),
+            "series": stats.series(conn, ops),
+            "types": stats.types(conn, ledger, PORTFOLIO_ID),
+            "sales": stats.best_operations(ledger, ops),
+            "type_names": list(catalog.TYPES),
+        }
+
+    @app.post("/api/items/type")
+    def item_type(body: ItemTypeIn, conn: Conn, user: User) -> dict[str, Any]:
+        check_item(conn, body.item)
+        try:
+            catalog.set_type(conn, body.item, body.type or None)
+        except ValueError as e:
+            raise ApiError(str(e)) from e
+        return {"ok": True}
 
     # ---------- API: журнал ----------
 

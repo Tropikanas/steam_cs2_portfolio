@@ -7,7 +7,7 @@
 import sqlite3
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import httpx
@@ -38,6 +38,29 @@ def parse_cbr(xml: bytes) -> dict[Currency, Decimal]:
         if currency.name in rub_per_unit:
             rates[currency] = usd / rub_per_unit[currency.name]
     return rates
+
+
+CBR_DYNAMIC_URL = "https://www.cbr.ru/scripts/XML_dynamic.asp"
+CBR_IDS = {Currency.USD: "R01235", Currency.EUR: "R01239", Currency.CNY: "R01375", Currency.UAH: "R01720"}
+
+
+def parse_cbr_dynamic(xml: bytes) -> dict[date, Decimal]:
+    """Динамика курса одной валюты: дата → рублей за 1 единицу."""
+    result = {}
+    for record in ET.fromstring(xml).iter("Record"):
+        day = datetime.strptime(record.get("Date"), "%d.%m.%Y").date()
+        value = Decimal(record.findtext("Value", "0").replace(",", "."))
+        result[day] = value / Decimal(record.findtext("Nominal", "1"))
+    return result
+
+
+def cbr_rub_per_unit(currency: Currency, start: date, end: date) -> dict[date, Decimal]:
+    """Курс ЦБ за период одним запросом (для истории цен за годы)."""
+    response = httpx.get(CBR_DYNAMIC_URL, timeout=60, params={
+        "date_req1": start.strftime("%d/%m/%Y"), "date_req2": end.strftime("%d/%m/%Y"), "VAL_NM_RQ": CBR_IDS[currency],
+    })
+    response.raise_for_status()
+    return parse_cbr_dynamic(response.content)
 
 
 def fetch_cbr(day: date) -> dict[Currency, Decimal]:

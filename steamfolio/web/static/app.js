@@ -893,5 +893,166 @@ const SF = (() => {
     loadMeta().then(reload).catch((e) => toast(e.message, true));
   }
 
-  return { portfolioPage, ordersPage, journalPage };
+  // ---------- «Статистика» ----------
+
+  function statsPage() {
+    const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const alpha = (hex, a) => {
+      const n = parseInt(hex.replace("#", ""), 16);
+      return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+    };
+    // Порядок цветов секторов фиксирован по типам — цвет типа не меняется от данных.
+    const PALETTE = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2", "#ea580c", "#65a30d", "#dc2626", "#64748b"];
+    const VALUE = "#2563eb", INVESTED = "#f59e0b";
+    const el = (id) => document.getElementById(id);
+    const signed = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
+    let data, lineChart, pieChart, typeNames = [];
+    let period = +store.get("stats.period", "0");
+    let bestSort = store.get("stats.best", "pct");
+    let drill = null;
+
+    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+    Chart.defaults.color = css("--muted");
+    Chart.defaults.borderColor = css("--border");
+
+    const stat = (label, value, extra = "") => `<div class="card stat"><div class="label">${label}</div><div class="value">${value}</div>${extra}</div>`;
+
+    function renderSummary() {
+      const s = data.summary;
+      el("summary-now").innerHTML = stat("Вложено в текущие позиции", money(s.invested_usd, "USD"))
+        + stat("Текущая стоимость", money(s.value_usd, "USD"))
+        + stat("Нереализованная прибыль", signed(s.profit_usd), s.unpriced ? `<div class="small muted">без цены: ${s.unpriced}</div>` : "");
+      el("summary-all").innerHTML = stat("Всего вложено", money(s.total_invested_usd, "USD"))
+        + stat("Всего продано", money(s.total_sold_usd, "USD"))
+        + stat("Всего получено прибыли", signed(s.total_profit_usd));
+    }
+
+    function renderLine() {
+      const s = data.series;
+      const min = period ? Date.now() - period * 86400000 : undefined;
+      document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", +b.dataset.days === period));
+      const ds = (label, points, color, extra = {}) => ({
+        label, data: points.map(([x, y]) => ({ x, y })), borderColor: color, backgroundColor: alpha(color, 0.15),
+        fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
+      });
+      const datasets = [
+        ds("Стоимость портфеля", s.value, VALUE),
+        ds("Стоимость (оценка по истории продаж Steam)", s.value_estimate, VALUE, { borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.07) }),
+        ds("Вложено", s.invested, INVESTED, { stepped: "before", backgroundColor: alpha(INVESTED, 0.12) }),
+      ].filter((d) => d.data.length);
+      const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
+      const config = {
+        type: "line",
+        data: { datasets },
+        options: {
+          maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+          interaction: { mode: "nearest", axis: "x", intersect: false },
+          scales: {
+            x: { type: "linear", min, ticks: { callback: fmtDay, maxTicksLimit: 8 }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { callback: (v) => "$" + num(v, 0) } },
+          },
+          plugins: {
+            legend: { labels: { boxWidth: 12, usePointStyle: true } },
+            tooltip: { callbacks: {
+              title: (items) => dateTime(new Date(items[0].parsed.x).toISOString()),
+              label: (c) => `${c.dataset.label}: ${money(c.parsed.y, "USD")}`,
+            } },
+          },
+        },
+      };
+      if (lineChart) lineChart.destroy();
+      lineChart = new Chart(el("line"), config);
+      el("line-note").textContent = !datasets.length ? "Данных пока нет — внесите покупки на вкладке «Портфолио»."
+        : s.value_estimate.length ? `До ${date(s.launch)} стоимость — оценка по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
+        : "Стоимость — по лучшему ордеру на покупку, точка раз в 6 часов.";
+    }
+
+    function colorOf(type) {
+      const i = typeNames.indexOf(type);
+      return PALETTE[(i < 0 ? typeNames.length : i) % PALETTE.length];
+    }
+
+    function renderPie() {
+      const types = data.types.types;
+      const level = drill ? types.find((t) => t.type === drill) : null;
+      if (drill && !level) drill = null;
+      const slices = level ? level.items : types;
+      const base = level ? colorOf(level.type) : null;
+      const colors = slices.map((s, i) => level ? alpha(base, Math.max(0.25, 1 - i * (0.75 / Math.max(slices.length, 1)))) : colorOf(s.type));
+      el("pie-title").textContent = level ? `${level.type}: ${money(level.value_usd, "USD")}` : `По типам предметов: ${money(data.types.total_usd, "USD")}`;
+      el("pie-back").classList.toggle("hidden", !level);
+      const config = {
+        type: "doughnut",
+        data: {
+          labels: slices.map((s) => level ? s.item : s.type),
+          datasets: [{ data: slices.map((s) => s.value_usd), backgroundColor: colors, borderColor: css("--surface"), borderWidth: 2 }],
+        },
+        options: {
+          maintainAspectRatio: false, animation: { duration: 250 }, cutout: "55%",
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (c) => `${c.label}: ${money(c.parsed, "USD")} (${num(slices[c.dataIndex].share, 1)}%)` } },
+          },
+          onClick: (_, els) => { if (!level && els.length) { drill = slices[els[0].index].type; renderPie(); } },
+          onHover: (e, els) => { e.native.target.style.cursor = !level && els.length ? "pointer" : "default"; },
+        },
+      };
+      if (pieChart) pieChart.destroy();
+      pieChart = slices.length ? new Chart(el("pie"), config) : null;
+      const sw = (c) => `<span class="swatch" style="background:${c}"></span>`;
+      el("pie-table").innerHTML = !slices.length ? '<div class="empty-state">Портфель пуст</div>'
+        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th>${level ? "<th>Тип</th>" : ""}</tr></thead><tbody>
+        ${slices.map((s, i) => level
+          ? `<tr><td class="name">${sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
+              <td class="num">${num(s.quantity, 0)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td>
+              <td><select data-item="${esc(s.item)}" aria-label="Тип предмета">${typeNames.map((t) => `<option ${t === level.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></td></tr>`
+          : `<tr class="clickable" data-type="${esc(s.type)}"><td>${sw(colors[i])}${esc(s.type)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`).join("")}
+        </tbody></table>`;
+      el("pie-table").querySelectorAll("tr[data-type]").forEach((tr) => tr.onclick = () => { drill = tr.dataset.type; renderPie(); });
+      el("pie-table").querySelectorAll("select[data-item]").forEach((sel) => sel.onchange = async () => {
+        try {
+          await api("POST", "/api/items/type", { item: sel.dataset.item, type: sel.value });
+          toast(`Тип «${sel.dataset.item}»: ${sel.value}`);
+          await load();
+        } catch (e) { toast(e.message, true); }
+      });
+    }
+
+    function renderBest() {
+      document.querySelectorAll("#best-sort button").forEach((b) => b.classList.toggle("active", b.dataset.sort === bestSort));
+      const key = bestSort === "pct" ? "profit_pct" : "profit_usd";
+      const all = [...data.sales].sort((a, b) => b[key] - a[key]);
+      const rows = el("best-all").checked ? all : all.slice(0, 10);
+      el("best").innerHTML = !rows.length ? '<div class="empty-state">Продаж пока нет</div>'
+        : `<table><thead><tr><th>#</th><th>Предмет</th><th>Дата продажи</th><th class="num">Кол-во</th><th class="num">Прибыль, $</th><th class="num">Прибыль, %</th><th class="num">Срок, мес.</th></tr></thead><tbody>
+          ${rows.map((s, i) => `<tr><td class="muted">${i + 1}</td><td class="name">${esc(s.item)}<span class="type">${money(s.profit, s.currency)} в валюте строки</span></td>
+            <td>${date(s.date)}</td><td class="num">${num(s.quantity, 0)}</td><td class="num">${signed(s.profit_usd)}</td><td class="num">${pct(s.profit_pct)}</td><td class="num">${num(s.months, 1)}</td></tr>`).join("")}
+          </tbody></table>`;
+    }
+
+    async function load() {
+      data = await api("GET", "/api/stats");
+      typeNames = data.type_names;
+      renderSummary();
+      renderLine();
+      renderPie();
+      renderBest();
+    }
+
+    document.querySelectorAll("#period button").forEach((b) => b.onclick = () => {
+      period = +b.dataset.days;
+      store.set("stats.period", String(period));
+      renderLine();
+    });
+    document.querySelectorAll("#best-sort button").forEach((b) => b.onclick = () => {
+      bestSort = b.dataset.sort;
+      store.set("stats.best", bestSort);
+      renderBest();
+    });
+    el("best-all").onchange = renderBest;
+    el("pie-back").onclick = () => { drill = null; renderPie(); };
+    loadMeta().then(load).catch((e) => toast(e.message, true));
+  }
+
+  return { portfolioPage, ordersPage, journalPage, statsPage };
 })();

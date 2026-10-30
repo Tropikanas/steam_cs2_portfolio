@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from steamfolio import alerts, auth, backup, catalog, collector, db, export, history, stats, telegram, views
 from steamfolio.clock import today_msk
-from steamfolio.currencies import USER_CURRENCIES, Currency
+from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.fx import FxResolver, FxUnavailable
 from steamfolio.journal import Journal, JournalError, create_account
 from steamfolio.ledger import Op, replay
@@ -299,7 +299,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     def meta(conn: Conn, user: User) -> dict[str, Any]:
         return {
             "accounts": views.accounts(conn, PORTFOLIO_ID),
-            "currencies": [c.name for c in USER_CURRENCIES],
+            "currencies": [{"code": c.name, "symbol": SYMBOLS[c], "name": NAMES[c]} for c in USER_CURRENCIES],
             "today": today_msk().isoformat(),
             "last_update": views.last_update(conn),
         }
@@ -418,6 +418,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         return {
             "summary": stats.summary(conn, ledger, PORTFOLIO_ID),
             "series": stats.series(conn, ops),
+            "chart_currencies": stats.chart_currencies(ledger),
             "types": stats.types(conn, ledger, PORTFOLIO_ID),
             "sales": stats.best_operations(ledger, ops),
             "type_names": list(catalog.TYPES),

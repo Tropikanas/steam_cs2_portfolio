@@ -163,7 +163,10 @@ def test_stats_series_by_currency(client):
     client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 2, "price": "50"})
     assert client.get("/api/stats/series?currency=RUB").json()["currency"] == "RUB"
     assert client.get("/api/stats/series?currency=TOTAL").json()["currency"] == "USD"
-    assert client.get("/api/stats/series?currency=EUR").status_code == 400
+    assert client.get("/api/stats/series?currency=KZT").json()["value"] == []  # любая валюта Steam
+    assert client.get("/api/stats/series?currency=BYN").status_code == 400  # Steam её не поддерживает
+    assert [c["code"] for c in client.get("/api/stats").json()["chart_currencies"]] == ["RUB"]
+    assert len(client.get("/api/meta").json()["currencies"]) == 39
 
 
 def test_export_endpoint(client):

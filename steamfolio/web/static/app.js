@@ -399,6 +399,7 @@ const SF = (() => {
   let meta = null;
   async function loadMeta() {
     meta = await api("GET", "/api/meta");
+    meta.currencies.forEach((c) => { SIGN[c.code] = c.symbol; });
     const el = document.getElementById("last-update");
     if (el) el.textContent = "Цены обновлены: " + dateTime(meta.last_update);
     return meta;
@@ -407,7 +408,7 @@ const SF = (() => {
   // Для фильтров — все аккаунты, включая скрытые: по ним могут быть закрытые позиции и операции.
   const accountNames = () => meta.accounts.map((a) => a.name);
   const accountOptions = (exclude) => activeAccounts().filter((a) => a.id !== exclude).map((a) => ({ value: a.id, label: a.name }));
-  const currencyOptions = () => meta.currencies.map((c) => ({ value: c, label: c }));
+  const currencyOptions = () => meta.currencies.map((c) => ({ value: c.code, label: `${c.code} ${c.symbol} — ${c.name}` }));
 
   function requireAccounts(then) {
     if (activeAccounts().length) return then();
@@ -1000,7 +1001,7 @@ const SF = (() => {
             value: String(c.price).replace(".", ","), attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' }],
       );
       if (!fill) layout.push(
-        [{ name: "currency", label: "Валюта", type: "select", options: meta.currencies.map((x) => ({ value: x, label: x })), value: c.currency },
+        [{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: c.currency },
           { name: "account_id", label: "Аккаунт", type: "select", options: accounts, value: c.account_id }],
       );
       layout.push(
@@ -1082,8 +1083,7 @@ const SF = (() => {
       const cur = s.currency || "USD";
       const min = period ? Date.now() - period * 86400000 : undefined;
       document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", +b.dataset.days === period));
-      document.querySelectorAll("#chart-currency button").forEach((b) => b.classList.toggle("active", b.dataset.cur === chartCurrency));
-      const axis = (v) => cur === "USD" ? "$" + num(v, 0) : `${num(v, 0)} ${SIGN[cur]}`;
+      const axis = (v) => cur === "USD" ? "$" + num(v, 0) : `${num(v, 0)} ${SIGN[cur] || cur}`;
       const ds = (label, points, color, extra = {}) => ({
         label, data: points.map(([x, y]) => ({ x, y })), borderColor: color, backgroundColor: alpha(color, 0.15),
         fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
@@ -1203,6 +1203,12 @@ const SF = (() => {
       data = await api("GET", "/api/stats");
       typeNames = data.type_names;
       renderSummary();
+      // В списке только валюты, которые есть в портфеле, — по убыванию вложенного.
+      const codes = data.chart_currencies.map((c) => c.code);
+      if (!codes.includes(chartCurrency)) chartCurrency = "TOTAL";
+      el("chart-currency").innerHTML = '<option value="TOTAL">Total</option>'
+        + data.chart_currencies.map((c) => `<option value="${esc(c.code)}">${esc(c.code)} ${esc(c.symbol)}</option>`).join("");
+      el("chart-currency").value = chartCurrency;
       if (chartCurrency === "TOTAL") renderLine(); else await loadSeries();
       renderPie();
       renderBest();
@@ -1213,11 +1219,11 @@ const SF = (() => {
       store.set("stats.period", String(period));
       renderLine();
     });
-    document.querySelectorAll("#chart-currency button").forEach((b) => b.onclick = () => {
-      chartCurrency = b.dataset.cur;
+    el("chart-currency").onchange = (e) => {
+      chartCurrency = e.target.value;
       store.set("stats.currency", chartCurrency);
       loadSeries();
-    });
+    };
     document.querySelectorAll("#best-sort button").forEach((b) => b.onclick = () => {
       bestSort = b.dataset.sort;
       store.set("stats.best", bestSort);

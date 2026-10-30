@@ -322,7 +322,7 @@ class Journal:
         if not item:
             raise JournalError("не указан предмет")
         if currency not in USER_CURRENCIES:
-            raise JournalError(f"валюта должна быть одной из: {', '.join(c.name for c in USER_CURRENCIES)}")
+            raise JournalError("валюта должна быть одной из валют Steam")
         self._check_account(account_id)
         if op_date > today_msk():
             raise JournalError("дата операции в будущем")

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from steamfolio import alerts, auth, backup, catalog, collector, db, health, history, telegram
 from steamfolio.ledger import Op, replay
-from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency, format_minor
+from steamfolio.currencies import USER_CURRENCIES, Currency, format_minor, rate_currencies
 from steamfolio.market import Market, SteamHttp, listing_url, nameids
 from steamfolio.settings import Settings, load_settings
 
@@ -90,20 +90,21 @@ def cmd_report(conn: sqlite3.Connection, settings: Settings, args: argparse.Name
     by_item: dict[str, dict[int, int | None]] = {}
     for s in samples:
         by_item.setdefault(s["market_hash_name"], {})[s["currency"]] = s["lowest_sell"]
-    header = f"  {'лот (самый дешёвый на продаже)':<42}" + "".join(f"{c.name:>13}" for c in (Currency.USD, *RATE_CURRENCIES))
+    rate_cols = rate_currencies({Currency(s["currency"]) for s in samples})
+    header = f"  {'лот (самый дешёвый на продаже)':<42}" + "".join(f"{c.name:>13}" for c in (Currency.USD, *rate_cols))
     print(header)
     for name, prices in by_item.items():
-        cells = "".join(f"{format_minor(prices.get(c)):>13}" for c in (Currency.USD, *RATE_CURRENCIES))
+        cells = "".join(f"{format_minor(prices.get(c)):>13}" for c in (Currency.USD, *rate_cols))
         print(f"  {name[:42]:<42}{cells}")
     rates = conn.execute("SELECT * FROM fx_snapshots WHERE run_id = ?", (run["id"],)).fetchall()
     rate_by_c = {Currency(r["currency"]): r for r in rates}
     line = f"  {'КУРС (медиана)':<42}{'1.000':>13}"
-    for c in RATE_CURRENCIES:
+    for c in rate_cols:
         r = rate_by_c.get(c)
         line += f"{r['rate']:>13.3f}" if r else f"{'нет':>13}"
     print(line)
     line = f"  {'разброс между предметами':<42}{'':>13}"
-    for c in RATE_CURRENCIES:
+    for c in rate_cols:
         r = rate_by_c.get(c)
         line += f"{r['spread_pct']:>12.2f}%" if r else f"{'':>13}"
     print(line + "\n")
@@ -117,9 +118,10 @@ def cmd_report(conn: sqlite3.Connection, settings: Settings, args: argparse.Name
     for q in quotes:
         table.setdefault(q["market_hash_name"], {})[q["currency"]] = q
     comments = dict(conn.execute("SELECT market_hash_name, comment FROM tracked_items").fetchall())
-    print(f"  {'#':>2} {'предмет':<48}" + "".join(f"{c.name:>12}" for c in USER_CURRENCIES) + "  примечание")
+    price_cols = [c for c in USER_CURRENCIES if any(int(c) in by_c for by_c in table.values())]
+    print(f"  {'#':>2} {'предмет':<48}" + "".join(f"{c.name:>12}" for c in price_cols) + "  примечание")
     for i, (name, by_c) in enumerate(table.items(), 1):
-        cells = "".join(f"{format_minor(by_c[c]['best_buy']) if c in by_c else 'ошибка':>12}" for c in USER_CURRENCIES)
+        cells = "".join(f"{format_minor(by_c[c]['best_buy']) if c in by_c else '—':>12}" for c in price_cols)
         notes = [comments.get(name, "")]
         if any(q["source"] != "histogram" for q in by_c.values()):
             notes.append("пересчёт из EUR (нет item_nameid)")

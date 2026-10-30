@@ -4,7 +4,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
-from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency
+from steamfolio.currencies import MAIN_CURRENCIES, USER_CURRENCIES, Currency, rate_currencies
 from steamfolio.db import utcnow
 from steamfolio.ledger import Op, replay
 from steamfolio.market import Market, MarketError
@@ -24,7 +24,7 @@ class Target:
 
 
 def targets(conn: sqlite3.Connection) -> list[Target]:
-    """Предметы портфеля и ордеров — в валютах их строк и в USD; tracked_items — во всех валютах."""
+    """Предметы портфеля и ордеров — в валютах их строк и в USD; tracked_items — в основных валютах."""
     needed: dict[str, set[Currency]] = {}
     for (portfolio_id,) in conn.execute("SELECT id FROM portfolios").fetchall():
         rows = conn.execute("SELECT * FROM operations WHERE portfolio_id = ?", (portfolio_id,)).fetchall()
@@ -34,7 +34,7 @@ def targets(conn: sqlite3.Connection) -> list[Target]:
         ]:
             needed.setdefault(item, set()).update((currency, Currency.USD))
     for (item,) in conn.execute("SELECT market_hash_name FROM tracked_items ORDER BY rowid").fetchall():
-        needed.setdefault(item, set()).update(USER_CURRENCIES)
+        needed.setdefault(item, set()).update(MAIN_CURRENCIES)
     return [
         Target(item, tuple(c for c in USER_CURRENCIES if c in currencies)) for item, currencies in needed.items()
     ]
@@ -98,10 +98,12 @@ def missing_prices(conn: sqlite3.Connection, item: str, currency: Currency) -> T
 
 
 def _collect_rates(conn: sqlite3.Connection, market: Market, settings: Settings, run_id: int, problems: list[str]) -> bool:
+    # Курсы нужны для всех валют портфеля и ордеров: пересчёт цен в USD и запасной путь Market Beta.
+    currencies = rate_currencies({c for t in targets(conn) for c in t.currencies})
     prices: dict[str, dict[Currency, int | None]] = {}
     for name in settings.rate_items:
         prices[name] = {}
-        for currency in (Currency.USD, *RATE_CURRENCIES):
+        for currency in (Currency.USD, *currencies):
             try:
                 quote = market.quote(name, currency)
             except MarketError as e:
@@ -113,7 +115,7 @@ def _collect_rates(conn: sqlite3.Connection, market: Market, settings: Settings,
                 break
             prices[name][currency] = quote.lowest_sell
     rates, rate_problems = compute_rates(
-        prices, RATE_CURRENCIES, round(settings.min_rate_item_usd * 100), settings.min_rate_samples
+        prices, currencies, round(settings.min_rate_item_usd * 100), settings.min_rate_samples
     )
     problems.extend(rate_problems)
     now = utcnow()
@@ -128,7 +130,7 @@ def _collect_rates(conn: sqlite3.Connection, market: Market, settings: Settings,
         )
     for r in rates.values():
         log.info("Курс %s: %.4f (предметов %d, разброс %.2f%%)", r.currency.name, r.rate, r.samples, r.spread_pct)
-    return len(rates) == len(RATE_CURRENCIES)
+    return len(rates) == len(currencies)
 
 
 def _collect_prices(

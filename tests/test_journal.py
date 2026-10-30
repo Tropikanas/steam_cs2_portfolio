@@ -102,8 +102,8 @@ def test_backdated_purchase_changes_profit_of_later_sale(journal, acc):
 
 
 def test_validation(journal, acc):
-    with pytest.raises(JournalError):
-        journal.buy(CASE, acc, Currency.EUR, 1, 100, D("2026-01-01"))
+    with pytest.raises(JournalError, match="валют Steam"):
+        journal.buy(CASE, acc, None, 1, 100, D("2026-01-01"))
     with pytest.raises(JournalError):
         journal.buy(CASE, acc, RUB, 0, 100, D("2026-01-01"))
     with pytest.raises(JournalError):

@@ -17,10 +17,16 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from steamfolio import stats, views
 from steamfolio.clock import MSK
+from steamfolio.currencies import SYMBOLS, Currency
 from steamfolio.ledger import Ledger, Op
 
-MONEY = {"USD": '"$"#,##0.00', "RUB": '#,##0.00 "₽"', "CNY": '#,##0.00 "¥"', "UAH": '#,##0.00 "₴"'}
-PRICE = {"USD": '"$"#,##0.00##', "RUB": '#,##0.00## "₽"', "CNY": '#,##0.00## "¥"', "UAH": '#,##0.00## "₴"'}
+def _number_format(code: str, digits: str) -> str:
+    sign = SYMBOLS[Currency[code]]
+    return f'"$"#,##{digits}' if code == "USD" else f'#,##{digits} "{sign}"'
+
+
+MONEY = {c.name: _number_format(c.name, "0.00") for c in Currency}
+PRICE = {c.name: _number_format(c.name, "0.00##") for c in Currency}
 PCT = "0.00%"
 DATE = "DD.MM.YYYY"
 DATETIME = "DD.MM.YYYY HH:MM"

@@ -12,7 +12,7 @@ from typing import Any
 
 from steamfolio import views
 from steamfolio.clock import MSK, msk_date
-from steamfolio.currencies import Currency
+from steamfolio.currencies import SYMBOLS, Currency
 from steamfolio.ledger import Holding, Ledger, Op, RowKey, daily_holdings, replay
 
 
@@ -181,6 +181,20 @@ def series(
     return {"value": value, "value_estimate": estimate, "invested": invested_line,
             "profit": _realized_line(ops, [ms for ms, _ in invested_line], currency),
             "launch": launch.isoformat() if launch else None, "currency": (currency or Currency.USD).name}
+
+
+def chart_currencies(ledger: Ledger) -> list[dict[str, Any]]:
+    """Валюты для переключателя графика: с открытыми позициями или продажами (удалённые позиции не в счёт).
+
+    Порядок — по вложенному сейчас в USD, затем по коду.
+    """
+    invested: dict[Currency, Decimal] = defaultdict(Decimal)
+    for p in ledger.open_positions:
+        invested[p.key.currency] += p.cost_usd
+    for s in ledger.sales:
+        invested.setdefault(s.key.currency, Decimal(0))
+    ordered = sorted(invested.items(), key=lambda kv: (-kv[1], kv[0].name))
+    return [{"code": c.name, "symbol": SYMBOLS[c], "invested_usd": _usd(v)} for c, v in ordered]
 
 
 def _realized_line(ops: list[Op], moments: list[int], currency: Currency | None) -> list[list[float]]:

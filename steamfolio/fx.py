@@ -34,8 +34,9 @@ def parse_cbr(xml: bytes) -> dict[Currency, Decimal]:
     if not usd:
         raise FxUnavailable("в ответе ЦБ нет курса доллара")
     rates = {Currency.RUB: usd}
-    for currency in (Currency.CNY, Currency.UAH):
-        if currency.name in rub_per_unit:
+    # ЦБ публикует не все валюты Steam — для остальных курс до начала истории Steam вводится вручную.
+    for currency in Currency:
+        if currency not in (Currency.RUB, Currency.USD) and rub_per_unit.get(currency.name):
             rates[currency] = usd / rub_per_unit[currency.name]
     return rates
 

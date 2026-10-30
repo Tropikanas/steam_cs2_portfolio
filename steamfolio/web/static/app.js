@@ -408,7 +408,7 @@ const SF = (() => {
   // Для фильтров — все аккаунты, включая скрытые: по ним могут быть закрытые позиции и операции.
   const accountNames = () => meta.accounts.map((a) => a.name);
   const accountOptions = (exclude) => activeAccounts().filter((a) => a.id !== exclude).map((a) => ({ value: a.id, label: a.name }));
-  const currencyOptions = () => meta.currencies.map((c) => ({ value: c.code, label: `${c.code} ${c.symbol} — ${c.name}` }));
+  const currencyOptions = () => meta.currencies.map((c) => ({ value: c.code, label: `${c.code}, ${c.symbol} — ${c.name}` }));
 
   function requireAccounts(then) {
     if (activeAccounts().length) return then();
@@ -1084,16 +1084,25 @@ const SF = (() => {
       const min = period ? Date.now() - period * 86400000 : undefined;
       document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", +b.dataset.days === period));
       const axis = (v) => cur === "USD" ? "$" + num(v, 0) : `${num(v, 0)} ${SIGN[cur] || cur}`;
-      const ds = (label, points, color, extra = {}) => ({
-        label, data: points.map(([x, y]) => ({ x, y })), borderColor: color, backgroundColor: alpha(color, 0.15),
+      // Оценка портфеля лежит слоем поверх реализованной прибыли: y = оценка + прибыль на этот момент,
+      // настоящее значение — в v (его показывает подсказка). «Вложено» — отдельная линия без заливки.
+      const profit = (s.profit || []).some(([, y]) => y) ? s.profit : [];
+      const profitAt = (x) => {
+        let p = 0;
+        for (const [px, py] of profit) { if (px > x) break; p = py; }
+        return p;
+      };
+      const ds = (label, points, color, extra = {}, stacked = false) => ({
+        label, data: points.map(([x, v]) => ({ x, y: stacked ? v + profitAt(x) : v, v })),
+        borderColor: color, backgroundColor: alpha(color, 0.18),
         fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
       });
-      const profit = (s.profit || []).some(([, y]) => y) ? s.profit : [];
+      const onProfit = profit.length ? { target: 0 } : "origin";
       const datasets = [
-        ds("Текущая оценка портфеля", s.value, VALUE),
-        ds("Оценка по истории продаж Steam", s.value_estimate, VALUE, { borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.07) }),
-        ds("Вложено", s.invested, INVESTED, { stepped: "before", backgroundColor: alpha(INVESTED, 0.12) }),
-        ds("Реализованная прибыль", profit, PROFIT, { stepped: "before", fill: false }),
+        ds("Реализованная прибыль", profit, PROFIT, { stepped: "before", backgroundColor: alpha(PROFIT, 0.25) }),
+        ds("Текущая оценка портфеля", s.value, VALUE, { fill: onProfit }, true),
+        ds("Оценка по истории продаж Steam", s.value_estimate, VALUE, { fill: onProfit, borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.08) }, true),
+        ds("Вложено", s.invested, INVESTED, { stepped: "before", fill: false, borderWidth: 2.5 }),
       ].filter((d) => d.data.length);
       const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
       const config = {
@@ -1109,10 +1118,10 @@ const SF = (() => {
           plugins: {
             legend: { labels: { boxWidth: 12, usePointStyle: true } },
             tooltip: {
-              itemSort: (a, b) => b.parsed.y - a.parsed.y,  // сверху — большее значение
+              itemSort: (a, b) => b.raw.v - a.raw.v,  // сверху — большее значение
               callbacks: {
                 title: (items) => dateTime(new Date(items[0].parsed.x).toISOString()),
-                label: (c) => `${c.dataset.label}: ${money(c.parsed.y, cur)}`,
+                label: (c) => `${c.dataset.label}: ${money(c.raw.v, cur)}`,
               },
             },
           },
@@ -1126,7 +1135,8 @@ const SF = (() => {
         ? (chartCurrency === "TOTAL" ? "Данных пока нет — внесите покупки на вкладке «Портфолио»." : `Позиций в ${cur} нет.`)
         : scope + (s.value_estimate.length ? `До ${date(s.launch)} оценка портфеля — по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
         : "Оценка портфеля — по лучшему ордеру на покупку, точка раз в 6 часов.")
-          + " Реализованная прибыль — нарастающим итогом по продажам: цена продажи минус средняя цена покупки.";
+          + " Реализованная прибыль — нарастающим итогом по продажам: цена продажи минус средняя цена покупки."
+          + (profit.length ? " Оценка портфеля нарисована слоем поверх прибыли: верхний край синей заливки — их сумма." : "");
     }
 
     async function loadSeries() {
@@ -1207,7 +1217,7 @@ const SF = (() => {
       const codes = data.chart_currencies.map((c) => c.code);
       if (!codes.includes(chartCurrency)) chartCurrency = "TOTAL";
       el("chart-currency").innerHTML = '<option value="TOTAL">Total</option>'
-        + data.chart_currencies.map((c) => `<option value="${esc(c.code)}">${esc(c.code)} ${esc(c.symbol)}</option>`).join("");
+        + data.chart_currencies.map((c) => `<option value="${esc(c.code)}">${esc(c.code)}, ${esc(c.symbol)}</option>`).join("");
       el("chart-currency").value = chartCurrency;
       if (chartCurrency === "TOTAL") renderLine(); else await loadSeries();
       renderPie();

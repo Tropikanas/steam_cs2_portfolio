@@ -145,6 +145,8 @@ td.actions { white-space: nowrap; }
 td.actions button + button { margin-left: 4px; }
 button.danger { color: var(--error); }
 button.danger:hover { background: var(--error-bg); }
+button.icon-btn { padding: 3px 5px; line-height: 0; vertical-align: middle; }
+button.icon-btn svg { display: block; }
 td.comment { min-width: 140px; max-width: 260px; }
 .comment-edit { cursor: text; display: block; min-height: 20px; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
 .comment-edit:hover { background: var(--surface); outline: 1px dashed var(--border); }

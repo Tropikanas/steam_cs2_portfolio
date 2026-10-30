@@ -4,6 +4,7 @@ const SF = (() => {
   // ---------- форматирование ----------
 
   const SIGN = { RUB: "₽", USD: "$", CNY: "¥", UAH: "₴" };
+  const TRASH_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
   const FX_SOURCE = { steam: "курс Steam", cbr: "курс ЦБ на дату", usd: "", manual: "курс задан вручную" };
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -494,7 +495,7 @@ const SF = (() => {
         bind: (td, r) => !collapse.checked && !closed.checked && bindComment(td, r) },
       { id: "actions", title: "", cls: "actions", sortable: false,
         html: () => closed.checked ? "" : '<button class="small" data-a="sell">Продано</button><button class="small" data-a="move">Перенести</button>'
-          + '<button class="small danger" data-a="remove">Удалить позицию</button>',
+          + `<button class="small danger icon-btn" data-a="remove" title="Удалить позицию" aria-label="Удалить позицию">${TRASH_ICON}</button>`,
         bind: (td, r) => {
           const actions = { sell: sellForm, move: moveForm, remove: removeForm };
           td.querySelectorAll("button").forEach((b) => b.onclick = () => actions[b.dataset.a](r));

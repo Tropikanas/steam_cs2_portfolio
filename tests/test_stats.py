@@ -37,11 +37,49 @@ def test_series_value_and_invested(conn, journal, acc):
     journal.sell(CASE, acc, RUB, 5, 2000, D("2026-09-30"))  # себестоимость проданного $0.75
     run_with_prices(conn, "2026-09-30T06:00:00+00:00", {(CASE, USD): 20})
 
-    s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 30, 12, tzinfo=UTC))
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 30, 6, tzinfo=UTC))
     assert s["launch"] == "2026-09-28"
     assert s["value_estimate"] == []
     assert [y for _, y in s["value"]] == [1.2, 3.0, 3.0]  # 10×12¢, 20×15¢, 15×20¢
     assert [y for _, y in s["invested"]] == [1.0, 3.0, 2.25]
+
+
+def test_series_adds_current_point_after_last_run(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))
+    run_with_prices(conn, "2026-09-28T06:00:00+00:00", {(CASE, USD): 12})
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))  # после сбора — видно сразу
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 28, 9, tzinfo=UTC))
+    assert [y for _, y in s["invested"]] == [2.0, 2.0]  # точка сбора (конец дня) и «сейчас»
+    assert [y for _, y in s["value"]] == [2.4, 2.4]
+
+
+def test_removed_position_disappears_from_chart_history(conn, journal, acc, acc2):
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-01"))  # $1.00 — потом удалена целиком
+    journal.buy(AK, acc, USD, 1, 300, D("2026-09-01"))
+    journal.buy(CASE, acc2, RUB, 5, 800, D("2026-09-02"))  # $0.50 — другой аккаунт, остаётся
+    journal.sell(AK, acc, USD, 1, 400, D("2026-09-05"))
+    run_with_prices(conn, "2026-09-03T06:00:00+00:00", {})
+    run_with_prices(conn, "2026-09-10T06:00:00+00:00", {})
+    journal.remove_position(CASE, acc, RUB)
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 10, 6, tzinfo=UTC))
+    invested = dict(points(s["invested"]))
+    # до удаления строка «кейс на 1-м аккаунте» уже не учитывается: только AK $3 и кейс на 2-м аккаунте $0.50
+    assert invested["2026-09-03T06:00+00:00"] == 3.5
+    assert invested["2026-09-10T06:00+00:00"] == 0.5
+    assert all(y != 4.5 for _, y in s["invested"])
+
+
+def test_partial_history_kept_when_part_was_sold_before_removal(journal, acc):
+    from steamfolio.ledger import daily_holdings
+
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-01"))
+    journal.sell(CASE, acc, RUB, 4, 800, D("2026-09-05"))
+    journal.remove_position(CASE, acc, RUB)  # удалены оставшиеся 6
+    by_day = {day: state for day, state in daily_holdings(journal.ops())}
+    first = by_day[D("2026-09-01")]
+    (qty, cost), = first.values()
+    assert qty == 4 and cost == 40  # остались только проданные потом 4 шт. по $0.10
+    assert by_day[D("2026-09-05")] == {}
 
 
 def test_series_estimate_before_launch_uses_history(conn, journal, acc):

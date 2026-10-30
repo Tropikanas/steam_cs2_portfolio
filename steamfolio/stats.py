@@ -132,6 +132,12 @@ def series(conn: sqlite3.Connection, ops: list[Op], now: datetime | None = None)
         moment = datetime.fromisoformat(ts)
         value.append([_ms(moment), _usd(value_at(state, ts))])
         invested_line.append([_ms(moment), _usd(invested(state))])
+    # Последняя точка — «сейчас»: покупки, продажи и удаления видны сразу, не дожидаясь следующего сбора цен.
+    if runs and now > datetime.fromisoformat(runs[-1]):
+        state = held(msk_date(now.isoformat()))
+        ts = now.isoformat(timespec="seconds")
+        value.append([_ms(now), _usd(value_at(state, ts))])
+        invested_line.append([_ms(now), _usd(invested(state))])
     # Пунктир стыкуется со сплошной линией.
     if estimate and value:
         estimate.append(value[0])

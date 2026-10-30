@@ -12,9 +12,10 @@ import logging
 import sqlite3
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from steamfolio import db
 from steamfolio.clock import MSK, msk_date, today_msk
 from steamfolio.currencies import Currency
 from steamfolio.db import utcnow
@@ -120,4 +121,43 @@ def backfill(
         loaded += error is None
     if loaded:
         log.info("История цен загружена для %d предметов", loaded)
+    try:
+        cache_cbr_rates(conn, rub_rates)
+    except Exception as e:  # ЦБ недоступен — график в валютах подождёт, сбор цен не страдает
+        log.warning("Курсы ЦБ для оценки в валютах не загружены: %r", e)
     return loaded
+
+
+RATES_KEY = "history_cbr_rates"
+LOCAL_CURRENCIES = (Currency.RUB, Currency.CNY, Currency.UAH)
+
+
+def cache_cbr_rates(conn: sqlite3.Connection, rub_rates: RubRates = cbr_rub_per_unit) -> bool:
+    """Курсы ЦБ (единиц валюты за 1 USD) на каждый день истории цен — для графика в рублях, юанях, гривнах.
+
+    Загружаются одним запросом на валюту за весь период истории, повторно — только если период расширился.
+    """
+    first, last = conn.execute("SELECT MIN(day), MAX(day) FROM price_history").fetchone()
+    if first is None:
+        return False
+    covered = db.get_setting(conn, RATES_KEY)
+    if covered and covered["start"] <= first and covered["end"] >= last:
+        return False
+    start, end = date.fromisoformat(first), date.fromisoformat(last)
+    usd = _carry_forward(rub_rates(Currency.USD, start, end))
+    local = {c: _carry_forward(rub_rates(c, start, end)) for c in LOCAL_CURRENCIES if c != Currency.RUB}
+    rows = []
+    day = start
+    while day <= end:
+        usd_rub = usd(day)
+        if usd_rub:
+            rows.append((day.isoformat(), int(Currency.RUB), str(usd_rub)))
+            for c, rate in local.items():
+                if rate(day):
+                    rows.append((day.isoformat(), int(c), str(usd_rub / rate(day))))
+        day += timedelta(days=1)
+    with conn:
+        # Курсы на даты операций (их пишет FxResolver) не перезаписываются.
+        conn.executemany("INSERT OR IGNORE INTO fx_cbr (date, currency, rate) VALUES (?, ?, ?)", rows)
+    db.set_setting(conn, RATES_KEY, {"start": first, "end": last})
+    return True

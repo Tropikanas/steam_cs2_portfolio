@@ -77,9 +77,55 @@ def test_partial_history_kept_when_part_was_sold_before_removal(journal, acc):
     journal.remove_position(CASE, acc, RUB)  # удалены оставшиеся 6
     by_day = {day: state for day, state in daily_holdings(journal.ops())}
     first = by_day[D("2026-09-01")]
-    (qty, cost), = first.values()
-    assert qty == 4 and cost == 40  # остались только проданные потом 4 шт. по $0.10
+    (qty, cost_usd, cost), = first.values()
+    assert qty == 4 and cost_usd == 40 and cost == 3200  # остались только проданные потом 4 шт. по $0.10 (8 ₽)
     assert by_day[D("2026-09-05")] == {}
+
+
+def test_series_by_currency_only_that_currency_in_its_units(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))  # 80 ₽ / $1.00
+    journal.buy(AK, acc, USD, 1, 300, D("2026-09-28"))  # $3.00
+    run_with_prices(conn, "2026-09-28T06:00:00+00:00", {(CASE, RUB): 1000, (CASE, USD): 12, (AK, USD): 400})
+    now = datetime(2026, 9, 28, 6, tzinfo=UTC)
+    total = stats.series(conn, journal.ops(), now=now)
+    rub = stats.series(conn, journal.ops(), now=now, currency=RUB)
+    usd = stats.series(conn, journal.ops(), now=now, currency=USD)
+    cny = stats.series(conn, journal.ops(), now=now, currency=Currency.CNY)
+    assert (total["currency"], total["invested"][-1][1], total["value"][-1][1]) == ("USD", 4.0, 5.2)
+    assert (rub["currency"], rub["invested"][-1][1], rub["value"][-1][1]) == ("RUB", 80.0, 100.0)  # 10 × 10 ₽
+    assert (usd["invested"][-1][1], usd["value"][-1][1]) == (3.0, 4.0)
+    assert cny["value"] == [] and cny["invested"] == []
+
+
+def test_currency_estimate_uses_cbr_rate_of_the_day(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 10, 800, D("2021-11-15"))
+    with conn:
+        conn.execute("INSERT INTO price_history VALUES (?, '2021-11-15', 30, 1)", (CASE,))
+        conn.execute("INSERT OR REPLACE INTO fx_cbr VALUES ('2021-11-15', ?, '72.5')", (int(RUB),))
+    run_with_prices(conn, "2021-11-17T06:00:00+00:00", {(CASE, RUB): 2000})
+    s = stats.series(conn, journal.ops(), now=datetime(2021, 11, 17, 6, tzinfo=UTC), currency=RUB)
+    # 15.11 и 16.11: 10 шт. × 30¢ × 72.5 = 217.50 ₽; затем стык со снимком 10 × 20 ₽
+    assert [y for _, y in s["value_estimate"]] == [217.5, 217.5, 200.0]
+
+
+def test_cache_cbr_rates_fills_history_range(conn):
+    from steamfolio.history import cache_cbr_rates
+
+    with conn:
+        conn.executemany("INSERT INTO price_history VALUES (?, ?, 10, 1)", [(CASE, "2021-11-13"), (CASE, "2021-11-16")])
+    calls = []
+
+    def rub_rates(currency, start, end):
+        calls.append(currency)
+        return {D("2021-11-13"): {USD: Decimal(70), Currency.CNY: Decimal(11), Currency.UAH: Decimal("2.8")}[currency]}
+
+    assert cache_cbr_rates(conn, rub_rates)
+    rows = dict(conn.execute("SELECT currency || ' ' || date, rate FROM fx_cbr").fetchall())
+    assert Decimal(rows[f"{int(RUB)} 2021-11-16"]) == 70  # выходные — последний известный курс
+    assert Decimal(rows[f"{int(Currency.UAH)} 2021-11-13"]) == 25
+    assert len(rows) == 4 * 3
+    assert not cache_cbr_rates(conn, rub_rates)  # период уже покрыт — повторно не запрашиваем
+    assert len(calls) == 3
 
 
 def test_series_estimate_before_launch_uses_history(conn, journal, acc):

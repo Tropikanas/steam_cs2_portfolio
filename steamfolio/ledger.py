@@ -212,21 +212,24 @@ def replay(ops: list[Op]) -> Ledger:
     return ledger
 
 
-def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, tuple[int, Decimal]]]]:
-    """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость в USD)})].
+Holding = tuple[int, Decimal, Decimal]  # (количество, себестоимость в USD, себестоимость в валюте строки)
+
+
+def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
+    """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
 
     Удалённая позиция считается ошибочно внесённой: её штуки убираются и из прошлого,
     будто их никогда не было (остаток строки до даты удаления уменьшается на удалённое количество).
     """
     ledger, timeline = _prepare(ops)
-    result: list[tuple[date, dict[RowKey, tuple[int, Decimal]]]] = []
+    result: list[tuple[date, dict[RowKey, Holding]]] = []
     removals: list[tuple[date, RowKey, int]] = []
     for op in timeline:
         problems = len(ledger.violations)
         _apply(ledger, op)
         if op.kind == "position_removed" and len(ledger.violations) == problems:
             removals.append((op.op_date, RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity))
-        state = {k: (p.quantity, p.cost_usd) for k, p in ledger.positions.items() if p.quantity > 0}
+        state = {k: (p.quantity, p.cost_usd, p.cost) for k, p in ledger.positions.items() if p.quantity > 0}
         if result and result[-1][0] == op.op_date:
             result[-1] = (op.op_date, state)
         else:
@@ -235,10 +238,10 @@ def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, tuple[int, De
         for day, state in result:
             if day >= removed_on or key not in state:
                 continue
-            qty, cost_usd = state[key]
+            qty, cost_usd, cost = state[key]
             left = qty - removed
             if left > 0:
-                state[key] = (left, cost_usd * left / qty)  # по средней цене
+                state[key] = (left, cost_usd * left / qty, cost * left / qty)  # по средней цене
             else:
                 del state[key]
     # Если удалено всё, что было куплено в начале, график начинается с первой оставшейся покупки.

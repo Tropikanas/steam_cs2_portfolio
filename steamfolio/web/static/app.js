@@ -1057,6 +1057,7 @@ const SF = (() => {
     const signed = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
     let data, lineChart, pieChart, typeNames = [];
     let period = +store.get("stats.period", "0");
+    let chartCurrency = store.get("stats.currency", "TOTAL");
     let bestSort = store.get("stats.best", "pct");
     let drill = null;
 
@@ -1078,8 +1079,11 @@ const SF = (() => {
 
     function renderLine() {
       const s = data.series;
+      const cur = s.currency || "USD";
       const min = period ? Date.now() - period * 86400000 : undefined;
       document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", +b.dataset.days === period));
+      document.querySelectorAll("#chart-currency button").forEach((b) => b.classList.toggle("active", b.dataset.cur === chartCurrency));
+      const axis = (v) => cur === "USD" ? "$" + num(v, 0) : `${num(v, 0)} ${SIGN[cur]}`;
       const ds = (label, points, color, extra = {}) => ({
         label, data: points.map(([x, y]) => ({ x, y })), borderColor: color, backgroundColor: alpha(color, 0.15),
         fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
@@ -1098,22 +1102,32 @@ const SF = (() => {
           interaction: { mode: "nearest", axis: "x", intersect: false },
           scales: {
             x: { type: "linear", min, ticks: { callback: fmtDay, maxTicksLimit: 8 }, grid: { display: false } },
-            y: { beginAtZero: true, ticks: { callback: (v) => "$" + num(v, 0) } },
+            y: { beginAtZero: true, ticks: { callback: axis } },
           },
           plugins: {
             legend: { labels: { boxWidth: 12, usePointStyle: true } },
             tooltip: { callbacks: {
               title: (items) => dateTime(new Date(items[0].parsed.x).toISOString()),
-              label: (c) => `${c.dataset.label}: ${money(c.parsed.y, "USD")}`,
+              label: (c) => `${c.dataset.label}: ${money(c.parsed.y, cur)}`,
             } },
           },
         },
       };
       if (lineChart) lineChart.destroy();
       lineChart = new Chart(el("line"), config);
-      el("line-note").textContent = !datasets.length ? "Данных пока нет — внесите покупки на вкладке «Портфолио»."
-        : s.value_estimate.length ? `До ${date(s.launch)} стоимость — оценка по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
-        : "Стоимость — по лучшему ордеру на покупку, точка раз в 6 часов.";
+      const scope = chartCurrency === "TOTAL" ? "Все операции, суммы в USD по курсу на дату. "
+        : `Только строки в ${cur}, суммы в ${cur} без пересчёта. `;
+      el("line-note").textContent = !datasets.length
+        ? (chartCurrency === "TOTAL" ? "Данных пока нет — внесите покупки на вкладке «Портфолио»." : `Позиций в ${cur} нет.`)
+        : scope + (s.value_estimate.length ? `До ${date(s.launch)} стоимость — оценка по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
+        : "Стоимость — по лучшему ордеру на покупку, точка раз в 6 часов.");
+    }
+
+    async function loadSeries() {
+      try {
+        data.series = await api("GET", `/api/stats/series?currency=${chartCurrency}`);
+      } catch (e) { toast(e.message, true); }
+      renderLine();
     }
 
     function colorOf(type) {
@@ -1183,7 +1197,7 @@ const SF = (() => {
       data = await api("GET", "/api/stats");
       typeNames = data.type_names;
       renderSummary();
-      renderLine();
+      if (chartCurrency === "TOTAL") renderLine(); else await loadSeries();
       renderPie();
       renderBest();
     }
@@ -1192,6 +1206,11 @@ const SF = (() => {
       period = +b.dataset.days;
       store.set("stats.period", String(period));
       renderLine();
+    });
+    document.querySelectorAll("#chart-currency button").forEach((b) => b.onclick = () => {
+      chartCurrency = b.dataset.cur;
+      store.set("stats.currency", chartCurrency);
+      loadSeries();
     });
     document.querySelectorAll("#best-sort button").forEach((b) => b.onclick = () => {
       bestSort = b.dataset.sort;

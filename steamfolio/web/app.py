@@ -423,6 +423,11 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
             "type_names": list(catalog.TYPES),
         }
 
+    @app.get("/api/stats/series")
+    def stats_series(conn: Conn, user: User, currency: str = "TOTAL") -> dict[str, Any]:
+        cur = None if currency.upper() == "TOTAL" else _cur(currency.upper())
+        return stats.series(conn, journal(conn, user).ops(), currency=cur)
+
     @app.post("/api/items/type")
     def item_type(body: ItemTypeIn, conn: Conn, user: User) -> dict[str, Any]:
         check_item(conn, body.item)

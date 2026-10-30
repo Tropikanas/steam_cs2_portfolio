@@ -157,6 +157,15 @@ def test_remove_position_endpoint(client):
     assert again.status_code == 400
 
 
+def test_stats_series_by_currency(client):
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 2, "price": "50"})
+    assert client.get("/api/stats/series?currency=RUB").json()["currency"] == "RUB"
+    assert client.get("/api/stats/series?currency=TOTAL").json()["currency"] == "USD"
+    assert client.get("/api/stats/series?currency=EUR").status_code == 400
+
+
 def test_export_endpoint(client):
     assert client.post("/api/export", json={}).status_code == 401
     login(client)

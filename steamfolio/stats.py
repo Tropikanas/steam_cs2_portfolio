@@ -12,7 +12,7 @@ from typing import Any
 from steamfolio import views
 from steamfolio.clock import MSK, msk_date
 from steamfolio.currencies import Currency
-from steamfolio.ledger import Ledger, Op, RowKey, daily_holdings
+from steamfolio.ledger import Holding, Ledger, Op, RowKey, daily_holdings
 
 
 def _usd(minor: Decimal | int | None) -> float | None:
@@ -74,15 +74,32 @@ def _load_history(conn: sqlite3.Connection, items: set[str]) -> dict[str, _Serie
     return result
 
 
-def series(conn: sqlite3.Connection, ops: list[Op], now: datetime | None = None) -> dict[str, Any]:
-    """Линии «Стоимость портфеля» (снимки раз в 6 ч; до них — оценка по истории продаж) и «Вложено»."""
+def _load_cbr(conn: sqlite3.Connection, currency: Currency) -> _Series:
+    result = _Series()
+    for day, rate in conn.execute("SELECT date, rate FROM fx_cbr WHERE currency = ? ORDER BY date", (int(currency),)):
+        result.add(day, Decimal(rate))
+    return result
+
+
+def series(
+    conn: sqlite3.Connection, ops: list[Op], now: datetime | None = None, currency: Currency | None = None,
+) -> dict[str, Any]:
+    """Линии «Стоимость портфеля» (снимки раз в 6 ч; до них — оценка по истории продаж) и «Вложено».
+
+    currency=None — все строки в USD (Total); иначе только строки этой валюты, суммы в ней же.
+    """
     now = now or datetime.now(UTC)
     holdings = daily_holdings(ops)
+    if currency is not None:
+        holdings = [(d, {k: v for k, v in state.items() if k.currency == currency}) for d, state in holdings]
+        while holdings and not holdings[0][1]:
+            holdings.pop(0)
     if not holdings:
-        return {"value": [], "value_estimate": [], "invested": [], "launch": None}
+        return {"value": [], "value_estimate": [], "invested": [], "launch": None,
+                "currency": (currency or Currency.USD).name}
     days = [d for d, _ in holdings]
 
-    def held(day: date) -> dict[RowKey, tuple[int, Decimal]]:
+    def held(day: date) -> dict[RowKey, Holding]:
         i = bisect.bisect_right(days, day)
         return holdings[i - 1][1] if i else {}
 
@@ -90,32 +107,51 @@ def series(conn: sqlite3.Connection, ops: list[Op], now: datetime | None = None)
     snapshots = _load_snapshots(conn, items)
     rates = _load_rates(conn)
     history = _load_history(conn, items)
+    cbr = _load_cbr(conn, currency) if currency not in (None, Currency.USD) else None
     runs = [r[0] for r in conn.execute(
         """SELECT finished_at FROM collector_runs WHERE kind = 'scheduled' AND status IN ('ok', 'partial')
            AND finished_at IS NOT NULL ORDER BY finished_at"""
     )]
     launch = msk_date(runs[0]) if runs else None
 
-    def value_at(state: dict[RowKey, tuple[int, Decimal]], ts: str) -> Decimal:
+    def cost_of(holding: Holding) -> Decimal:
+        return holding[2] if currency is not None else holding[1]
+
+    def price_usd(key: RowKey, ts: str) -> Decimal | None:
+        price = snapshots[(key.market_hash_name, int(Currency.USD))].at(ts)
+        if price is None and key.currency != Currency.USD:
+            local = snapshots[(key.market_hash_name, int(key.currency))].at(ts)
+            rate = rates[int(key.currency)].at(ts)
+            return Decimal(local) / rate if local is not None and rate else None
+        return None if price is None else Decimal(price)
+
+    def price_local(key: RowKey, ts: str) -> Decimal | None:
+        """Лучший ордер в валюте строки; если его нет — из USD по курсу Steam."""
+        local = snapshots[(key.market_hash_name, int(key.currency))].at(ts)
+        if local is not None:
+            return Decimal(local)
+        usd = snapshots[(key.market_hash_name, int(Currency.USD))].at(ts)
+        rate = Decimal(1) if key.currency == Currency.USD else rates[int(key.currency)].at(ts)
+        return Decimal(usd) * rate if usd is not None and rate else None
+
+    def value_at(state: dict[RowKey, Holding], ts: str) -> Decimal:
         total = Decimal(0)
-        for key, (qty, cost_usd) in state.items():
-            price = snapshots[(key.market_hash_name, int(Currency.USD))].at(ts)
-            if price is None and key.currency != Currency.USD:
-                local = snapshots[(key.market_hash_name, int(key.currency))].at(ts)
-                rate = rates[int(key.currency)].at(ts)
-                price = Decimal(local) / rate if local is not None and rate else None
-            total += Decimal(price) * qty if price is not None else cost_usd
+        for key, holding in state.items():
+            price = price_usd(key, ts) if currency is None else price_local(key, ts)
+            total += price * holding[0] if price is not None else cost_of(holding)
         return total
 
-    def estimate_at(state: dict[RowKey, tuple[int, Decimal]], day: date) -> Decimal:
+    def estimate_at(state: dict[RowKey, Holding], day: date) -> Decimal:
+        # История продаж хранится в USD; для валюты строки — по курсу ЦБ на этот день.
+        rate = Decimal(1) if cbr is None else cbr.at(day.isoformat()) or (cbr.values[0] if cbr.values else None)
         total = Decimal(0)
-        for key, (qty, cost_usd) in state.items():
+        for key, holding in state.items():
             price = history[key.market_hash_name].at(day.isoformat())
-            total += Decimal(price) * qty if price is not None else cost_usd
+            total += Decimal(price) * rate * holding[0] if price is not None and rate else cost_of(holding)
         return total
 
-    def invested(state: dict[RowKey, tuple[int, Decimal]]) -> Decimal:
-        return sum((cost for _, cost in state.values()), Decimal(0))
+    def invested(state: dict[RowKey, Holding]) -> Decimal:
+        return sum((cost_of(h) for h in state.values()), Decimal(0))
 
     value, estimate, invested_line = [], [], []
     # До первого снимка — ежедневная оценка по истории продаж Steam.
@@ -142,7 +178,7 @@ def series(conn: sqlite3.Connection, ops: list[Op], now: datetime | None = None)
     if estimate and value:
         estimate.append(value[0])
     return {"value": value, "value_estimate": estimate, "invested": invested_line,
-            "launch": launch.isoformat() if launch else None}
+            "launch": launch.isoformat() if launch else None, "currency": (currency or Currency.USD).name}
 
 
 def types(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> dict[str, Any]:

@@ -97,6 +97,17 @@ def test_series_by_currency_only_that_currency_in_its_units(conn, journal, acc):
     assert cny["value"] == [] and cny["invested"] == []
 
 
+def test_realized_profit_line(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 10, 1000, D("2026-09-28"))  # 10 шт. по 10 ₽ ($0.125)
+    run_with_prices(conn, "2026-09-28T06:00:00+00:00", {(CASE, RUB): 900})
+    journal.sell(CASE, acc, RUB, 10, 5000, D("2026-09-29"))  # по 50 ₽: прибыль 400 ₽ = $5.00
+    run_with_prices(conn, "2026-09-29T06:00:00+00:00", {(CASE, RUB): 900})
+    now = datetime(2026, 9, 29, 6, tzinfo=UTC)
+    assert [y for _, y in stats.series(conn, journal.ops(), now=now)["profit"]] == [0.0, 5.0]
+    assert [y for _, y in stats.series(conn, journal.ops(), now=now, currency=RUB)["profit"]] == [0.0, 400.0]
+    assert [y for _, y in stats.series(conn, journal.ops(), now=now, currency=USD)["profit"]] == []
+
+
 def test_currency_estimate_uses_cbr_rate_of_the_day(conn, journal, acc):
     journal.buy(CASE, acc, RUB, 10, 800, D("2021-11-15"))
     with conn:

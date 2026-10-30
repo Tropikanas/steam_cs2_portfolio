@@ -5,6 +5,7 @@ from __future__ import annotations
 import bisect
 import sqlite3
 from collections import defaultdict
+from itertools import accumulate
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 from steamfolio import views
 from steamfolio.clock import MSK, msk_date
 from steamfolio.currencies import Currency
-from steamfolio.ledger import Holding, Ledger, Op, RowKey, daily_holdings
+from steamfolio.ledger import Holding, Ledger, Op, RowKey, daily_holdings, replay
 
 
 def _usd(minor: Decimal | int | None) -> float | None:
@@ -95,7 +96,7 @@ def series(
         while holdings and not holdings[0][1]:
             holdings.pop(0)
     if not holdings:
-        return {"value": [], "value_estimate": [], "invested": [], "launch": None,
+        return {"value": [], "value_estimate": [], "invested": [], "profit": [], "launch": None,
                 "currency": (currency or Currency.USD).name}
     days = [d for d, _ in holdings]
 
@@ -178,7 +179,24 @@ def series(
     if estimate and value:
         estimate.append(value[0])
     return {"value": value, "value_estimate": estimate, "invested": invested_line,
+            "profit": _realized_line(ops, [ms for ms, _ in invested_line], currency),
             "launch": launch.isoformat() if launch else None, "currency": (currency or Currency.USD).name}
+
+
+def _realized_line(ops: list[Op], moments: list[int], currency: Currency | None) -> list[list[float]]:
+    """Реализованная прибыль нарастающим итогом на те же моменты, что и «Вложено»: сумма прибыли продаж по дату."""
+    sales = sorted(
+        (s.op_date, s.profit_usd if currency is None else s.profit)
+        for s in replay(ops).sales if currency is None or s.key.currency == currency
+    )
+    days = [d for d, _ in sales]
+    running = list(accumulate(p for _, p in sales))
+    line = []
+    for ms in moments:
+        day = datetime.fromtimestamp(ms / 1000, UTC).astimezone(MSK).date()
+        i = bisect.bisect_right(days, day)
+        line.append([ms, _usd(running[i - 1] if i else Decimal(0))])
+    return line
 
 
 def types(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> dict[str, Any]:

@@ -1052,7 +1052,7 @@ const SF = (() => {
     };
     // Порядок цветов секторов фиксирован по типам — цвет типа не меняется от данных.
     const PALETTE = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2", "#ea580c", "#65a30d", "#dc2626", "#64748b"];
-    const VALUE = "#2563eb", INVESTED = "#f59e0b";
+    const VALUE = "#2563eb", INVESTED = "#f59e0b", PROFIT = "#16a34a";
     const el = (id) => document.getElementById(id);
     const signed = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
     let data, lineChart, pieChart, typeNames = [];
@@ -1088,10 +1088,12 @@ const SF = (() => {
         label, data: points.map(([x, y]) => ({ x, y })), borderColor: color, backgroundColor: alpha(color, 0.15),
         fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
       });
+      const profit = (s.profit || []).some(([, y]) => y) ? s.profit : [];
       const datasets = [
-        ds("Стоимость портфеля", s.value, VALUE),
-        ds("Стоимость (оценка по истории продаж Steam)", s.value_estimate, VALUE, { borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.07) }),
+        ds("Текущая оценка портфеля", s.value, VALUE),
+        ds("Оценка по истории продаж Steam", s.value_estimate, VALUE, { borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.07) }),
         ds("Вложено", s.invested, INVESTED, { stepped: "before", backgroundColor: alpha(INVESTED, 0.12) }),
+        ds("Реализованная прибыль", profit, PROFIT, { stepped: "before", fill: false }),
       ].filter((d) => d.data.length);
       const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
       const config = {
@@ -1106,10 +1108,13 @@ const SF = (() => {
           },
           plugins: {
             legend: { labels: { boxWidth: 12, usePointStyle: true } },
-            tooltip: { callbacks: {
-              title: (items) => dateTime(new Date(items[0].parsed.x).toISOString()),
-              label: (c) => `${c.dataset.label}: ${money(c.parsed.y, cur)}`,
-            } },
+            tooltip: {
+              itemSort: (a, b) => b.parsed.y - a.parsed.y,  // сверху — большее значение
+              callbacks: {
+                title: (items) => dateTime(new Date(items[0].parsed.x).toISOString()),
+                label: (c) => `${c.dataset.label}: ${money(c.parsed.y, cur)}`,
+              },
+            },
           },
         },
       };
@@ -1119,8 +1124,9 @@ const SF = (() => {
         : `Только строки в ${cur}, суммы в ${cur} без пересчёта. `;
       el("line-note").textContent = !datasets.length
         ? (chartCurrency === "TOTAL" ? "Данных пока нет — внесите покупки на вкладке «Портфолио»." : `Позиций в ${cur} нет.`)
-        : scope + (s.value_estimate.length ? `До ${date(s.launch)} стоимость — оценка по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
-        : "Стоимость — по лучшему ордеру на покупку, точка раз в 6 часов.");
+        : scope + (s.value_estimate.length ? `До ${date(s.launch)} оценка портфеля — по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
+        : "Оценка портфеля — по лучшему ордеру на покупку, точка раз в 6 часов.")
+          + " Реализованная прибыль — нарастающим итогом по продажам: цена продажи минус средняя цена покупки.";
     }
 
     async function loadSeries() {

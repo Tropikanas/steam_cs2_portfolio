@@ -205,6 +205,8 @@ dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 480px) { .field-row { grid-template-columns: 1fr; } }
 .info { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.info p { margin: 0; }
+.info p + p { margin-top: 8px; }
 .error { background: var(--error-bg); color: var(--error); border-radius: 8px; padding: 8px 10px; font-size: 13px; white-space: pre-line; }
 .error ul { margin: 4px 0 0; padding-left: 18px; }
 

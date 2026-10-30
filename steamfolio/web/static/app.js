@@ -669,7 +669,6 @@ const SF = (() => {
 
     // Удаление позиции как ошибочно внесённой: «Вложено» и «Всего вложено» уменьшаются, прибыли нет.
     function removeForm(r) {
-      const single = r.account_id != null;
       openForm({
         title: `Удалить позицию: ${r.item}`,
         submit: "Удалить позицию",
@@ -678,13 +677,11 @@ const SF = (() => {
           { name: "_note", type: "static", label: "", required: false, html: '<div class="info" data-remove-info></div>' },
         ],
         onInput: (ctx) => {
-          const qty = available(r, ctx.el("account_id").value);
-          // Себестоимость в USD известна точно только для отдельной строки (в свёрнутом виде средняя общая).
-          const cost = single && r.cost_usd != null ? ` на <b>${money(r.cost_usd, "USD")}</b>` : "";
+          const acc = r.accounts.find((a) => a.id === +ctx.el("account_id").value) || r.accounts[0];
           ctx.form.querySelector("[data-remove-info]").innerHTML =
-            `Будет удалено <b>${num(qty, 0)} шт.</b> (${esc(r.currency)}) — как ошибочно внесённые.<br>
-            «Вложено» и «Всего вложено» в статистике уменьшатся${cost}, прибыли и убытка не будет.<br>
-            <span class="muted small">Прошлые продажи не меняются. В журнал запишется операция «позиция удалена» — её можно откатить.</span>`;
+            `<p>Будет удалено <b>${num(acc.quantity, 0)} шт.</b> <b>${esc(r.item)}</b> с аккаунта <b>${esc(acc.name)}</b>
+            в валюте <b>${esc(r.currency)}</b> — как ошибочно внесённые.</p>
+            <p>Объём вложенных средств уменьшится на <b>${money(acc.cost, r.currency)}</b>.<br>Прошлые продажи не изменятся.</p>`;
         },
         onSubmit: async (v) => {
           await api("POST", "/api/remove-position", { item: r.item, currency: r.currency, account_id: +v.account_id });

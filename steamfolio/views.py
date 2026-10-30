@@ -127,7 +127,7 @@ def portfolio(
             "price_at": price_at,
             "pct_avg": _pct(price, avg),
             "accounts": [{"id": p.key.account_id, "name": account_names.get(p.key.account_id, "?"),
-                          "quantity": p.quantity} for p in group],
+                          "quantity": p.quantity, "cost": _units(p.cost)} for p in group],
             "account": ", ".join(account_names.get(p.key.account_id, "?") for p in group),
             "account_id": first.key.account_id if not collapse else None,
             "comment": comments.get((name, first.key.account_id, int(currency)), "") if not collapse else "",

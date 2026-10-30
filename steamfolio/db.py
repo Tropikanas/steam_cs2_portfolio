@@ -264,6 +264,39 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX alerts_sent_item ON alerts_sent(market_hash_name, rule, sent_at);
     """,
+    # 6: операция «позиция удалена» (кнопка «Удалить позицию» в портфеле)
+    """
+    CREATE TABLE operations_new (
+        id               INTEGER PRIMARY KEY,
+        portfolio_id     INTEGER NOT NULL REFERENCES portfolios(id),
+        user_id          INTEGER REFERENCES users(id),
+        kind             TEXT NOT NULL CHECK (kind IN (
+                             'buy', 'sell', 'transfer', 'position_removed',
+                             'order_placed', 'order_changed', 'order_filled', 'order_removed',
+                             'buy_edited', 'buy_deleted', 'sell_edited', 'sell_deleted')),
+        op_date          TEXT NOT NULL,
+        created_at       TEXT NOT NULL,
+        market_hash_name TEXT,
+        account_id       INTEGER REFERENCES accounts(id),
+        to_account_id    INTEGER REFERENCES accounts(id),
+        currency         INTEGER,
+        quantity         INTEGER,
+        price            INTEGER,
+        fx_rate          TEXT,
+        fx_source        TEXT CHECK (fx_source IN ('usd', 'steam', 'cbr', 'manual')),
+        order_id         INTEGER REFERENCES operations(id),
+        target_id        INTEGER REFERENCES operations(id),
+        payload          TEXT,
+        comment          TEXT NOT NULL DEFAULT '',
+        cancelled_at     TEXT
+    );
+    INSERT INTO operations_new SELECT id, portfolio_id, user_id, kind, op_date, created_at, market_hash_name, account_id,
+        to_account_id, currency, quantity, price, fx_rate, fx_source, order_id, target_id, payload, comment, cancelled_at
+    FROM operations;
+    DROP TABLE operations;
+    ALTER TABLE operations_new RENAME TO operations;
+    CREATE INDEX operations_portfolio ON operations(portfolio_id, op_date);
+    """,
 ]
 
 

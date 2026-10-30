@@ -34,6 +34,7 @@ KIND_NAMES = {
     "sell_edited": "продажа изменена",
     "sell_deleted": "продажа удалена",
     "transfer": "перенос на аккаунт",
+    "position_removed": "позиция удалена",
 }
 # Поля исполнения ордера, которые можно изменить: предмет, валюта и аккаунт задаются ордером.
 FILL_EDITABLE_FIELDS = ("op_date", "quantity", "price", "fx_rate", "fx_source", "comment")
@@ -137,6 +138,16 @@ class Journal:
             raise JournalError("аккаунты «откуда» и «куда» совпадают")
         return self._add(Op(PENDING_ID, "transfer", op_date, utcnow(), item, from_account_id, currency, quantity,
                             comment=comment, to_account_id=to_account_id))
+
+    def remove_position(self, item: str, account_id: int, currency: Currency, comment: str = "") -> int:
+        """Удалить весь текущий остаток строки как ошибочно внесённый: «Вложено» и «Всего вложено» уменьшаются."""
+        today = today_msk()
+        pos = self.ledger().positions.get(RowKey(item, account_id, currency))
+        if pos is None or pos.quantity == 0:
+            raise JournalError(f"позиции «{item}» в {currency.name} на этом аккаунте нет")
+        self._check_trade(item, account_id, currency, pos.quantity, 0, today)
+        return self._add(Op(PENDING_ID, "position_removed", today, utcnow(), item, account_id, currency, pos.quantity,
+                            comment=comment))
 
     def edit(self, op_id: int, **changes) -> int:
         """Изменить покупку, продажу или исполнение ордера. Пишется отдельной операцией «было → стало»."""

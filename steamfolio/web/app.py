@@ -95,6 +95,12 @@ class TransferIn(BaseModel):
     comment: str = ""
 
 
+class RemovePositionIn(BaseModel):
+    item: str
+    account_id: int
+    currency: str
+
+
 class CommentIn(BaseModel):
     item: str
     account_id: int
@@ -341,6 +347,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         op_id = journal(conn, user).transfer(body.item, body.from_account_id, body.to_account_id,
                                              currency(body.currency), body.quantity, body.date, body.comment.strip())
         return {"op_id": op_id}
+
+    @app.post("/api/remove-position")
+    def remove_position(body: RemovePositionIn, conn: Conn, user: User) -> dict[str, Any]:
+        return {"op_id": journal(conn, user).remove_position(body.item, body.account_id, currency(body.currency))}
 
     @app.post("/api/position-comment")
     def position_comment(body: CommentIn, conn: Conn, user: User) -> dict[str, Any]:

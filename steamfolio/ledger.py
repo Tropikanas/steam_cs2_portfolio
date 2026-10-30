@@ -230,7 +230,7 @@ def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:
     ledger = Ledger()
     current = effective_ops(ops)
     valid_fills = _replay_orders(ledger, sorted((op for op in current if op.kind.startswith("order_")), key=lambda o: o.entry_key))
-    timeline = [op for op in current if op.kind in ("buy", "sell", "transfer") or op.id in valid_fills]
+    timeline = [op for op in current if op.kind in ("buy", "sell", "transfer", "position_removed") or op.id in valid_fills]
     return ledger, sorted(timeline, key=lambda o: o.sort_key)
 
 
@@ -239,6 +239,8 @@ def _apply(ledger: Ledger, op: Op) -> None:
         _sell(ledger, op)
     elif op.kind == "transfer":
         _transfer(ledger, op)
+    elif op.kind == "position_removed":
+        _remove(ledger, op)
     else:
         _buy(ledger, op)
 
@@ -314,6 +316,29 @@ def _transfer(ledger: Ledger, op: Op) -> None:
     else:
         src.cost -= avg * op.quantity
         src.cost_usd -= avg_usd * op.quantity
+
+
+def _remove(ledger: Ledger, op: Op) -> None:
+    """Удаление позиции как ошибочно внесённой: остаток уходит по средней цене, будто его не покупали.
+
+    «Всего вложено» уменьшается на его себестоимость в USD, прибыли и убытка нет.
+    """
+    key = RowKey(op.market_hash_name, op.account_id, op.currency)
+    pos = ledger.positions.get(key)
+    have = pos.quantity if pos else 0
+    if op.quantity > have:
+        ledger.violations.append(
+            Violation(op.id, f"удаление {op.quantity} шт. «{op.market_hash_name}» {op.op_date:%d.%m.%Y} при остатке {have} шт.")
+        )
+        return
+    avg, avg_usd = pos.avg_price, pos.avg_price_usd
+    ledger.invested_usd -= avg_usd * op.quantity
+    pos.quantity -= op.quantity
+    if pos.quantity == 0:
+        pos.cost = pos.cost_usd = Decimal(0)
+    else:
+        pos.cost -= avg * op.quantity
+        pos.cost_usd -= avg_usd * op.quantity
 
 
 def _sell(ledger: Ledger, op: Op) -> None:

@@ -493,9 +493,11 @@ const SF = (() => {
           : `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`,
         bind: (td, r) => !collapse.checked && !closed.checked && bindComment(td, r) },
       { id: "actions", title: "", cls: "actions", sortable: false,
-        html: () => closed.checked ? "" : '<button class="small" data-a="sell">Продано</button><button class="small" data-a="move">Перенести</button>',
+        html: () => closed.checked ? "" : '<button class="small" data-a="sell">Продано</button><button class="small" data-a="move">Перенести</button>'
+          + '<button class="small danger" data-a="remove">Удалить позицию</button>',
         bind: (td, r) => {
-          td.querySelectorAll("button").forEach((b) => b.onclick = () => b.dataset.a === "sell" ? sellForm(r) : moveForm(r));
+          const actions = { sell: sellForm, move: moveForm, remove: removeForm };
+          td.querySelectorAll("button").forEach((b) => b.onclick = () => actions[b.dataset.a](r));
         } },
     ];
 
@@ -659,6 +661,33 @@ const SF = (() => {
           await api("POST", "/api/transfer", { item: r.item, currency: r.currency, from_account_id: +v.account_id,
             to_account_id: +v.to_account_id, quantity: +v.quantity, date: v.date, comment: v.comment });
           toast(`Перенесено: ${r.item}, ${v.quantity} шт.`);
+          await reload();
+        },
+      });
+    }
+
+    // Удаление позиции как ошибочно внесённой: «Вложено» и «Всего вложено» уменьшаются, прибыли нет.
+    function removeForm(r) {
+      const single = r.account_id != null;
+      openForm({
+        title: `Удалить позицию: ${r.item}`,
+        submit: "Удалить позицию",
+        layout: [
+          accountField(r, "Аккаунт"),
+          { name: "_note", type: "static", label: "", required: false, html: '<div class="info" data-remove-info></div>' },
+        ],
+        onInput: (ctx) => {
+          const qty = available(r, ctx.el("account_id").value);
+          // Себестоимость в USD известна точно только для отдельной строки (в свёрнутом виде средняя общая).
+          const cost = single && r.cost_usd != null ? ` на <b>${money(r.cost_usd, "USD")}</b>` : "";
+          ctx.form.querySelector("[data-remove-info]").innerHTML =
+            `Будет удалено <b>${num(qty, 0)} шт.</b> (${esc(r.currency)}) — как ошибочно внесённые.<br>
+            «Вложено» и «Всего вложено» в статистике уменьшатся${cost}, прибыли и убытка не будет.<br>
+            <span class="muted small">Прошлые продажи не меняются. В журнал запишется операция «позиция удалена» — её можно откатить.</span>`;
+        },
+        onSubmit: async (v) => {
+          await api("POST", "/api/remove-position", { item: r.item, currency: r.currency, account_id: +v.account_id });
+          toast(`Позиция удалена: ${r.item}`);
           await reload();
         },
       });

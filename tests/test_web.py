@@ -143,6 +143,20 @@ def test_money_parsing(client):
     assert r.status_code == 400
 
 
+def test_remove_position_endpoint(client):
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD", "quantity": 2, "price": "0,50"})
+    r = client.post("/api/remove-position", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD"})
+    assert r.status_code == 200
+    assert client.get("/api/portfolio").json()["rows"] == []
+    assert client.get("/api/stats").json()["summary"]["total_invested_usd"] == 0
+    kinds = [row["kind_name"] for row in client.get("/api/journal").json()["rows"]]
+    assert kinds[0] == "позиция удалена"
+    again = client.post("/api/remove-position", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD"})
+    assert again.status_code == 400
+
+
 def test_export_endpoint(client):
     assert client.post("/api/export", json={}).status_code == 401
     login(client)

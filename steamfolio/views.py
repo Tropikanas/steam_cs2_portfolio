@@ -85,6 +85,8 @@ def portfolio(
     conn: sqlite3.Connection, ledger: Ledger, *, collapse: bool = False, closed: bool = False,
     portfolio_id: int = 1, now: datetime | None = None,
 ) -> dict[str, Any]:
+    if closed:
+        return sales(conn, ledger, portfolio_id)
     now = now or datetime.now(UTC)
     prices = Prices(conn, now)
     rates = latest_rates(conn)
@@ -159,6 +161,43 @@ def portfolio(
         },
         "last_update": last_update(conn),
     }
+
+
+def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> dict[str, Any]:
+    """«Закрытые позиции»: строка на каждую продажу — что продано, по какой средней, с какой доходностью."""
+    account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
+    comments = {
+        (r["market_hash_name"], r["account_id"], r["currency"]): r["comment"]
+        for r in conn.execute("SELECT * FROM position_comments WHERE portfolio_id = ?", (portfolio_id,))
+    }
+    items = _items(conn, {s.key.market_hash_name for s in ledger.sales})
+    rows = []
+    for s in ledger.sales:
+        name, account_id, currency = s.key
+        rows.append({
+            "op_id": s.op_id,
+            "item": name,
+            "icon": (items.get(name) or {"icon_url": None})["icon_url"],
+            "type": catalog.item_type(items.get(name)),
+            "url": listing_url(name),
+            "quantity": s.quantity,
+            "avg_price": _units(s.avg_price, 4),
+            "avg_price_usd": _units(s.avg_price_usd, 4),
+            "sale_price": _units(s.price),
+            "first_buy_date": s.first_buy_date.isoformat() if s.first_buy_date else None,
+            "sale_date": s.op_date.isoformat(),
+            "days": s.days_held,
+            "currency": currency.name,
+            "profit": _units(s.profit),
+            "profit_usd": _units(s.profit_usd),
+            "profit_pct": round(float(s.profit_pct), 2),
+            "annual_pct": round(float(s.annual_pct), 2),
+            "account": account_names.get(account_id, "?"),
+            "account_id": account_id,
+            "comment": comments.get((name, account_id, int(currency)), ""),
+        })
+    rows.sort(key=lambda r: (r["sale_date"], r["op_id"]), reverse=True)
+    return {"rows": rows, "summary": None, "last_update": last_update(conn)}
 
 
 FIELD_NAMES = {

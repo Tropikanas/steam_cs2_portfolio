@@ -473,7 +473,29 @@ const SF = (() => {
     const filters = {};
     let table;
 
-    const columns = () => [
+    const columns = () => closed.checked ? closedColumns() : openColumns();
+    // «Закрытые позиции»: строка на каждую продажу.
+    const closedColumns = () => [
+      { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
+      { id: "item", title: "Название", key: "item", cls: "name sticky-2", filter: true, text: (r) => r.item + " " + r.type,
+        html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a><span class="type">${esc(r.type)}</span>` },
+      { id: "quantity", title: "Продано, шт.", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
+      { id: "avg", title: "Средняя цена покупки", key: "avg_price", cls: "num", numeric: true, filter: true,
+        html: (r) => `<span title="в USD по курсам дат покупок: ${money(r.avg_price_usd, "USD", true)}">${money(r.avg_price, r.currency, true)}</span>` },
+      { id: "sale_price", title: "Цена продажи", key: "sale_price", cls: "num", numeric: true, filter: true,
+        html: (r) => money(r.sale_price, r.currency) },
+      { id: "first", title: "Первая покупка", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
+      { id: "sale_date", title: "Дата продажи", key: "sale_date", filter: true, text: (r) => date(r.sale_date), html: (r) => date(r.sale_date) },
+      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
+      { id: "profit_pct", title: "% прибыли", key: "profit_pct", cls: "num", numeric: true, filter: true,
+        html: (r) => `<span title="Прибыль: ${money(r.profit, r.currency)} (${money(r.profit_usd, "USD")})">${pct(r.profit_pct)}</span>` },
+      { id: "annual_pct", title: "% годовых", key: "annual_pct", cls: "num", numeric: true, filter: true,
+        html: (r) => `<span title="За ${num(r.days, 0)} дн. владения">${pct(r.annual_pct)}</span>` },
+      { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames, values: (r) => [r.account],
+        html: (r) => esc(r.account) },
+      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
+    ];
+    const openColumns = () => [
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
       { id: "item", title: "Название", key: "item", cls: "name sticky-2", filter: true, text: (r) => r.item + " " + r.type,
         html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a><span class="type">${esc(r.type)}</span>` },
@@ -542,10 +564,13 @@ const SF = (() => {
         <div class="card stat"><div class="label">Текущая стоимость</div><div class="value">${money(s.value_usd, "USD")}</div></div>
         <div class="card stat"><div class="label">Нереализованная прибыль</div><div class="value ${s.profit_usd > 0 ? "up" : s.profit_usd < 0 ? "down" : ""}">${s.profit_usd > 0 ? "+" : ""}${money(s.profit_usd, "USD")}</div>
           ${s.unpriced ? `<div class="small muted">без цены: ${s.unpriced} — учтены по себестоимости</div>` : ""}</div>`;
+      // Продажи всегда по аккаунтам — «Свернуть аккаунты» к ним не относится.
+      collapse.disabled = closed.checked;
       table = makeTable(document.getElementById("table"), columns(), {
-        storageKey: "portfolio",
+        storageKey: closed.checked ? "closed" : "portfolio",
         filters,
-        empty: closed.checked ? "Закрытых позиций нет" : "Портфель пуст — нажмите «Добавить закупленное»",
+        defaultSort: closed.checked ? { id: "sale_date", dir: -1 } : null,
+        empty: closed.checked ? "Продаж пока нет — они появятся после кнопки «Продано»" : "Портфель пуст — нажмите «Добавить закупленное»",
       });
       table.setRows(data.rows);
     }
@@ -704,10 +729,13 @@ const SF = (() => {
           [{ label: "Нет, выгрузить всё", value: false }, { label: "Да, с фильтрами", value: true, primary: true }]);
         if (useFilters === null) return;
         if (useFilters) {
-          const pass = (r) => active.every((c) => matches(filters[c.id], c, r));
-          const keys = (rows) => rows.filter(pass).map((r) => [r.item, r.account_id, r.currency]);
+          // У открытых строк и продаж свои колонки — каждый лист фильтруется по своим.
+          const passFor = (list) => (r) => list.filter((c) => c.filter && filterSet(filters[c.id])).every((c) => matches(filters[c.id], c, r));
           const [open, shut] = await Promise.all([api("GET", "/api/portfolio?closed=false"), api("GET", "/api/portfolio?closed=true")]);
-          body = { open: keys(open.rows), closed: keys(shut.rows) };
+          body = {
+            open: open.rows.filter(passFor(openColumns())).map((r) => [r.item, r.account_id, r.currency]),
+            closed: shut.rows.filter(passFor(closedColumns())).map((r) => r.op_id),
+          };
         }
       }
       btn.disabled = true;

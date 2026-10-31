@@ -152,9 +152,9 @@ class AccountIn(BaseModel):
 
 
 class ExportIn(BaseModel):
-    # Строки портфеля после фильтров на сайте: [предмет, id аккаунта, валюта]; None — выгрузить всё.
+    # После фильтров на сайте: строки портфеля [предмет, id аккаунта, валюта] и продажи (id операций); None — всё.
     open: list[tuple[str, int, str]] | None = None
-    closed: list[tuple[str, int, str]] | None = None
+    closed: list[int] | None = None
 
 
 class AlertsIn(BaseModel):

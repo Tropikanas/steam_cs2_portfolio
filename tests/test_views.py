@@ -93,12 +93,22 @@ def test_unpriced_item_counted_at_cost(conn, journal, acc):
     assert summary == {"invested_usd": 0.25, "value_usd": 0.25, "profit_usd": 0.0, "unpriced": 1}
 
 
-def test_closed_positions(conn, journal, acc):
-    journal.buy(CASE, acc, RUB, 1, 1000, date(2026, 10, 1))
-    journal.sell(CASE, acc, RUB, 1, 2000, date(2026, 10, 2))
+def test_closed_positions_are_sales(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 4, 1000, date(2026, 9, 1))  # 10 ₽
+    journal.buy(CASE, acc, RUB, 4, 2000, date(2026, 9, 11))  # средняя 15 ₽
+    journal.sell(CASE, acc, RUB, 3, 3000, date(2026, 10, 1))  # по 30 ₽: +100 %, 30 дней с 01.09
+    journal.sell(CASE, acc, RUB, 5, 1500, date(2026, 10, 1))  # по 15 ₽: 0 %
+    journal.buy(CASE, acc, RUB, 1, 1000, date(2026, 10, 2))
+    journal.sell(CASE, acc, RUB, 1, 1100, date(2026, 10, 2))  # в тот же день: +10 % за 1 день
     assert views.portfolio(conn, journal.ledger(), now=NOW)["rows"] == []
-    [row] = views.portfolio(conn, journal.ledger(), closed=True, now=NOW)["rows"]
-    assert row["quantity"] == 0
+    rows = views.portfolio(conn, journal.ledger(), closed=True, now=NOW)["rows"]
+    got = [(r["quantity"], r["avg_price"], r["sale_price"], r["first_buy_date"], r["sale_date"], r["days"],
+            r["profit_pct"], r["annual_pct"]) for r in rows]
+    assert got == [
+        (1, 10.0, 11.0, "2026-10-02", "2026-10-02", 1, 10.0, 3650.0),
+        (5, 15.0, 15.0, "2026-09-01", "2026-10-01", 30, 0.0, 0.0),
+        (3, 15.0, 30.0, "2026-09-01", "2026-10-01", 30, 100.0, 1216.67),
+    ]
 
 
 def test_orders_view_outbid_and_reserved(conn, journal, acc):

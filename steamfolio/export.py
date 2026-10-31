@@ -99,6 +99,25 @@ POSITION_COLUMNS = [
 ]
 
 
+SALE_COLUMNS = [
+    ("Название", 40), ("Тип", 18), ("Аккаунт", 16), ("Валюта", 8), ("Продано, шт.", 10), ("Средняя цена покупки", 14),
+    ("Цена продажи", 14), ("Первая покупка", 13), ("Дата продажи", 13), ("Дней владения", 9),
+    ("% прибыли", 11), ("% годовых", 11), ("Прибыль", 14), ("Прибыль, USD", 14), ("Комментарий", 30),
+]
+
+
+def _sales(sheet: _Sheet, rows: Iterable[dict[str, Any]]) -> None:
+    for r in rows:
+        cur = r["currency"]
+        sheet.add(
+            [r["item"], r["type"], r["account"], cur, r["quantity"], r["avg_price"], r["sale_price"],
+             _day(r["first_buy_date"]), _day(r["sale_date"]), r["days"], _frac(r["profit_pct"]), _frac(r["annual_pct"]),
+             r["profit"], r["profit_usd"], r["comment"]],
+            {6: PRICE[cur], 7: MONEY[cur], 8: DATE, 9: DATE, 11: PCT, 12: PCT, 13: MONEY[cur], 14: MONEY["USD"]},
+            link=(1, r["url"]),
+        )
+
+
 def _status(r: dict[str, Any]) -> str:
     parts = ["откачена" if r["cancelled"] else "действует"]
     if r["edited_by"]:
@@ -130,19 +149,21 @@ def _journal(sheet: _Sheet, rows: list[dict[str, Any]]) -> None:
 
 def build(
     conn: sqlite3.Connection, ledger: Ledger, ops: list[Op], portfolio_id: int = 1,
-    only: dict[str, set[RowKey]] | None = None, now: datetime | None = None,
+    only: dict[str, set[Any]] | None = None, now: datetime | None = None,
 ) -> bytes:
-    """only — строки портфеля, оставшиеся после фильтров на сайте: {"open": {...}, "closed": {...}}; None — всё."""
+    """only — что осталось после фильтров на сайте: {"open": {(предмет, аккаунт, валюта)}, "closed": {id продаж}};
+    None — всё."""
     now = now or datetime.now(UTC)
     wb = Workbook()
 
     def keep(rows: list[dict[str, Any]], part: str) -> list[dict[str, Any]]:
         if only is None:
             return rows
-        return [r for r in rows if (r["item"], r["account_id"], r["currency"]) in only.get(part, set())]
+        key = (lambda r: r["op_id"]) if part == "closed" else (lambda r: (r["item"], r["account_id"], r["currency"]))
+        return [r for r in rows if key(r) in only.get(part, set())]
 
     open_rows = keep(views.portfolio(conn, ledger, portfolio_id=portfolio_id, now=now)["rows"], "open")
-    closed_rows = keep(views.portfolio(conn, ledger, closed=True, portfolio_id=portfolio_id, now=now)["rows"], "closed")
+    closed_rows = keep(views.sales(conn, ledger, portfolio_id)["rows"], "closed")
 
     # Сводка
     ws = wb.active
@@ -176,8 +197,8 @@ def build(
     _positions(sheet, open_rows)
     sheet.finish()
 
-    sheet = _Sheet(wb.create_sheet("Закрытые позиции"), POSITION_COLUMNS)
-    _positions(sheet, closed_rows)
+    sheet = _Sheet(wb.create_sheet("Закрытые позиции"), SALE_COLUMNS)
+    _sales(sheet, closed_rows)
     sheet.finish()
 
     orders = views.orders(conn, ledger, portfolio_id)

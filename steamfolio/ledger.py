@@ -150,6 +150,17 @@ class Sale:
     profit_usd: Decimal
     profit_pct: Decimal  # цена продажи / средняя − 1, в процентах
     months: Decimal  # от самой ранней даты покупки позиции до продажи
+    first_buy_date: date | None = None
+
+    @property
+    def days_held(self) -> int:
+        """Сколько дней держали; куплено и продано в один день — считаем за 1 день."""
+        return max(1, (self.op_date - self.first_buy_date).days) if self.first_buy_date else 1
+
+    @property
+    def annual_pct(self) -> Decimal:
+        """Простые проценты годовых: % прибыли × 365 / дней владения."""
+        return self.profit_pct * 365 / self.days_held
 
 
 @dataclass
@@ -403,6 +414,7 @@ def _sell(ledger: Ledger, op: Op) -> None:
             profit_usd=profit_usd,
             profit_pct=(op.price / avg - 1) * 100 if avg else Decimal(0),
             months=(days / DAYS_PER_MONTH).quantize(Decimal("0.1"), ROUND_HALF_UP),
+            first_buy_date=pos.first_buy_date,
         )
     )
     ledger.sold_usd += revenue_usd

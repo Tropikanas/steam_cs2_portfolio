@@ -117,6 +117,15 @@ class Position:
     cost: Decimal = Decimal(0)  # себестоимость остатка в валюте строки
     cost_usd: Decimal = Decimal(0)  # она же по курсам на даты покупок
     first_buy_date: date | None = None  # с последнего открытия позиции с нуля
+    # С последнего открытия с нуля: были ли продажи или переносы на другой аккаунт,
+    # и закрыта ли позиция удалением. Удалённая без продаж и переносов — не «закрытая», её будто не было.
+    exited: bool = False
+    removed: bool = False
+
+    def reopen(self, day: date) -> None:
+        self.cost = self.cost_usd = Decimal(0)
+        self.first_buy_date = day
+        self.exited = self.removed = False
 
     @property
     def avg_price(self) -> Decimal | None:
@@ -181,7 +190,8 @@ class Ledger:
 
     @property
     def closed_positions(self) -> list[Position]:
-        return [p for p in self.positions.values() if p.quantity == 0]
+        """Проданные или перенесённые целиком; удалённые как ошибочные сюда не входят."""
+        return [p for p in self.positions.values() if p.quantity == 0 and not (p.removed and not p.exited)]
 
     @property
     def open_orders(self) -> list[OrderState]:
@@ -303,8 +313,7 @@ def _buy(ledger: Ledger, op: Op) -> None:
     key = RowKey(op.market_hash_name, op.account_id, op.currency)
     pos = ledger.positions.setdefault(key, Position(key))
     if pos.quantity == 0:
-        pos.cost = pos.cost_usd = Decimal(0)
-        pos.first_buy_date = op.op_date
+        pos.reopen(op.op_date)
     amount = Decimal(op.quantity * op.price)
     amount_usd = amount / op.fx_rate
     pos.quantity += op.quantity
@@ -327,14 +336,14 @@ def _transfer(ledger: Ledger, op: Op) -> None:
     dst_key = RowKey(op.market_hash_name, op.to_account_id, op.currency)
     dst = ledger.positions.setdefault(dst_key, Position(dst_key))
     if dst.quantity == 0:
-        dst.cost = dst.cost_usd = Decimal(0)
-        dst.first_buy_date = src.first_buy_date
+        dst.reopen(src.first_buy_date)
     else:
         dst.first_buy_date = min(dst.first_buy_date, src.first_buy_date)
     dst.quantity += op.quantity
     dst.cost += avg * op.quantity
     dst.cost_usd += avg_usd * op.quantity
     src.quantity -= op.quantity
+    src.exited = True
     if src.quantity == 0:
         src.cost = src.cost_usd = Decimal(0)
     else:
@@ -360,6 +369,7 @@ def _remove(ledger: Ledger, op: Op) -> None:
     pos.quantity -= op.quantity
     if pos.quantity == 0:
         pos.cost = pos.cost_usd = Decimal(0)
+        pos.removed = True
     else:
         pos.cost -= avg * op.quantity
         pos.cost_usd -= avg_usd * op.quantity
@@ -398,6 +408,7 @@ def _sell(ledger: Ledger, op: Op) -> None:
     ledger.sold_usd += revenue_usd
     ledger.profit_usd += profit_usd
     pos.quantity -= op.quantity
+    pos.exited = True
     if pos.quantity == 0:
         pos.cost = pos.cost_usd = Decimal(0)
     else:

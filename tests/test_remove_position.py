@@ -39,6 +39,25 @@ def test_remove_only_one_account(journal, acc, acc2):
     assert ledger.invested_usd == 300
 
 
+def test_removed_positions_not_in_closed(journal, acc, acc2):
+    journal.buy(CASE, acc, RUB, 5, 8000, D("2026-09-01"))
+    journal.remove_position(CASE, acc, RUB)  # ошибочная — не «закрытая»
+    journal.buy("AK", acc, RUB, 5, 8000, D("2026-09-01"))
+    journal.sell("AK", acc, RUB, 2, 8000, D("2026-09-02"))
+    journal.remove_position("AK", acc, RUB)  # часть продана — позиция была настоящей
+    journal.buy("AWP", acc, RUB, 1, 8000, D("2026-09-01"))
+    journal.transfer("AWP", acc, acc2, RUB, 1, D("2026-09-02"))
+    journal.remove_position("AWP", acc2, RUB)  # на acc ушла переносом, на acc2 — удалена
+    journal.buy("M4", acc, RUB, 1, 8000, D("2026-09-01"))
+    journal.sell("M4", acc, RUB, 1, 8000, D("2026-09-02"))
+    closed = {(p.key.market_hash_name, p.key.account_id) for p in journal.ledger().closed_positions}
+    assert closed == {("AK", acc), ("AWP", acc), ("M4", acc)}
+
+    journal.buy(CASE, acc, RUB, 1, 8000, D("2026-09-03"))  # куплено снова и продано — теперь закрытая
+    journal.sell(CASE, acc, RUB, 1, 8000, D("2026-09-04"))
+    assert (CASE, acc) in {(p.key.market_hash_name, p.key.account_id) for p in journal.ledger().closed_positions}
+
+
 def test_cannot_remove_empty_position(journal, acc):
     with pytest.raises(JournalError):
         journal.remove_position(CASE, acc, RUB)

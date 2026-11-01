@@ -45,12 +45,24 @@ def test_series_value_and_invested(conn, journal, acc):
 
 
 def test_series_adds_current_point_after_last_run(conn, journal, acc):
-    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-27"))
     run_with_prices(conn, "2026-09-28T06:00:00+00:00", {(CASE, USD): 12})
-    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))  # после сбора — видно сразу
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))  # сегодняшняя — видна сразу, в точке «сейчас»
     s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 28, 9, tzinfo=UTC))
-    assert [y for _, y in s["invested"]] == [2.0, 2.0]  # точка сбора (конец дня) и «сейчас»
-    assert [y for _, y in s["value"]] == [2.4, 2.4]
+    # 27.09 — конец дня (до первого сбора), сбор сегодня утром — ещё без сегодняшней покупки, «сейчас» — с ней
+    assert [y for _, y in s["invested"]] == [1.0, 1.0, 2.0]
+    assert [y for _, y in s["value"]] == [1.2, 2.4]
+
+
+def test_day_changes_go_to_last_point_of_that_day(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-27"))  # $1.00
+    for hour in (0, 6, 12, 18):
+        run_with_prices(conn, f"2026-09-28T{hour:02}:00:00+00:00", {(CASE, USD): 12})
+    run_with_prices(conn, "2026-09-29T00:00:00+00:00", {(CASE, USD): 12})
+    journal.buy(CASE, acc, RUB, 10, 1600, D("2026-09-28"))  # ещё $2.00 — внесена задним числом за 28.09
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 29, 0, tzinfo=UTC))
+    # 28.09 по МСК: сборы в 03, 09, 15, 21 — покупка дня только в последнем (21:00), дальше остаётся
+    assert [y for _, y in s["invested"]] == [1.0, 1.0, 1.0, 1.0, 3.0, 3.0]
 
 
 def test_series_starts_at_first_remaining_purchase(conn, journal, acc):

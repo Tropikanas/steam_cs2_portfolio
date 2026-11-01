@@ -155,6 +155,7 @@ def series(
         return sum((cost_of(h) for h in state.values()), Decimal(0))
 
     value, estimate, invested_line = [], [], []
+    as_of: list[date] = []  # на конец какого дня взяты остатки каждой точки «Вложено»
     # До первого снимка — ежедневная оценка по истории продаж Steam.
     end = launch or msk_date(now.isoformat())
     day = days[0]
@@ -163,25 +164,30 @@ def series(
         moment = datetime.combine(day, time(23, 59), MSK)
         estimate.append([_ms(moment), _usd(estimate_at(state, day))])
         invested_line.append([_ms(moment), _usd(invested(state))])
+        as_of.append(day)
         day += timedelta(days=1)
-    for ts in runs:
-        if msk_date(ts) < days[0]:
+    # Последняя точка — «сейчас»: покупки, продажи и удаления видны сразу, не дожидаясь следующего сбора цен.
+    moments = list(runs)
+    if runs and now > datetime.fromisoformat(runs[-1]):
+        moments.append(now.isoformat(timespec="seconds"))
+    for i, ts in enumerate(moments):
+        # У сделок нет времени, только дата: сделки дня меняют последнюю точку этого дня
+        # (сегодня — точку «сейчас»), более ранние точки дня — ещё на конец предыдущего дня.
+        day = msk_date(ts)
+        last_of_day = i == len(moments) - 1 or msk_date(moments[i + 1]) != day
+        state_day = day if last_of_day else day - timedelta(days=1)
+        if state_day < days[0]:
             continue  # график начинается с первой покупки, а не с первого сбора цен
-        state = held(msk_date(ts))
+        state = held(state_day)
         moment = datetime.fromisoformat(ts)
         value.append([_ms(moment), _usd(value_at(state, ts))])
         invested_line.append([_ms(moment), _usd(invested(state))])
-    # Последняя точка — «сейчас»: покупки, продажи и удаления видны сразу, не дожидаясь следующего сбора цен.
-    if runs and now > datetime.fromisoformat(runs[-1]):
-        state = held(msk_date(now.isoformat()))
-        ts = now.isoformat(timespec="seconds")
-        value.append([_ms(now), _usd(value_at(state, ts))])
-        invested_line.append([_ms(now), _usd(invested(state))])
+        as_of.append(state_day)
     # Пунктир стыкуется со сплошной линией.
     if estimate and value:
         estimate.append(value[0])
     return {"value": value, "value_estimate": estimate, "invested": invested_line,
-            "profit": _realized_line(ops, [ms for ms, _ in invested_line], currency),
+            "profit": _realized_line(ops, [(ms, d) for (ms, _), d in zip(invested_line, as_of)], currency),
             "launch": launch.isoformat() if launch else None, "currency": (currency or Currency.USD).name}
 
 
@@ -199,8 +205,9 @@ def chart_currencies(ledger: Ledger) -> list[dict[str, Any]]:
     return [{"code": c.name, "symbol": SYMBOLS[c], "invested_usd": _usd(v)} for c, v in ordered]
 
 
-def _realized_line(ops: list[Op], moments: list[int], currency: Currency | None) -> list[list[float]]:
-    """Реализованная прибыль нарастающим итогом на те же моменты, что и «Вложено»: сумма прибыли продаж по дату."""
+def _realized_line(ops: list[Op], moments: list[tuple[int, date]], currency: Currency | None) -> list[list[float]]:
+    """Реализованная прибыль нарастающим итогом на те же моменты, что и «Вложено»: сумма прибыли продаж
+    по ту же дату, на конец которой взяты остатки точки."""
     sales = sorted(
         (s.op_date, s.profit_usd if currency is None else s.profit)
         for s in replay(ops).sales if currency is None or s.key.currency == currency
@@ -208,8 +215,7 @@ def _realized_line(ops: list[Op], moments: list[int], currency: Currency | None)
     days = [d for d, _ in sales]
     running = list(accumulate(p for _, p in sales))
     line = []
-    for ms in moments:
-        day = datetime.fromtimestamp(ms / 1000, UTC).astimezone(MSK).date()
+    for ms, day in moments:
         i = bisect.bisect_right(days, day)
         line.append([ms, _usd(running[i - 1] if i else Decimal(0))])
     return line

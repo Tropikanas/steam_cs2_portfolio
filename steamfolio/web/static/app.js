@@ -1346,7 +1346,9 @@ const SF = (() => {
       const ds = (label, points, color, extra = {}, stacked = false) => ({
         label, data: points.map(([x, v]) => ({ x, y: stacked ? v + profitAt(x) : v, v })),
         borderColor: color, backgroundColor: alpha(color, 0.18),
-        fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
+        // Одна точка (например, всё куплено сегодня) — линии ещё нет, рисуем саму точку.
+        fill: "origin", pointRadius: points.length === 1 ? 4 : 0, pointBackgroundColor: color,
+        pointHoverRadius: points.length === 1 ? 5 : 3, borderWidth: 2, tension: 0, ...extra,
       });
       const onProfit = profit.length ? { target: 0 } : "origin";
       // Ушла в минус — «убыток»: в легенде по последнему значению, в подсказке — по значению в точке.

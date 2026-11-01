@@ -509,7 +509,9 @@ const SF = (() => {
       { id: "first", title: "Первая покупка", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
       { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
       { id: "price", title: "Текущая цена", key: "price", cls: "num", numeric: true, filter: true,
-        html: (r) => `<span title="Лучший ордер на покупку, снят ${esc(dateTime(r.price_at))}">${money(r.price, r.currency)}</span>` },
+        html: (r) => r.price_stale
+          ? `<span class="stale" title="Цена устарела: снята ${esc(dateTime(r.price_at))}. Обновится при ближайшем сборе цен (раз в 6 часов)">${money(r.price, r.currency)} ⏱</span>`
+          : `<span title="Лучший ордер на покупку, снят ${esc(dateTime(r.price_at))}">${money(r.price, r.currency)}</span>` },
       { id: "pct_avg", title: "% к средней", key: "pct_avg", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_avg) },
       { id: "pct_1d", title: "% сутки", key: "pct_1d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_1d) },
       { id: "pct_7d", title: "% неделя", key: "pct_7d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_7d) },

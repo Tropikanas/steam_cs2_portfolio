@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from steamfolio import catalog
-from steamfolio.collector import latest_rates
+from steamfolio.collector import STALE_AFTER, latest_rates
 from steamfolio.currencies import Currency
 from steamfolio.journal import KIND_NAMES, Preview
 from steamfolio.ledger import DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, effective_ops
@@ -127,6 +127,8 @@ def portfolio(
             "currency": currency.name,
             "price": _units(price),
             "price_at": price_at,
+            # Цена давно не обновлялась (сбор её пропускал) — на сайте помечается.
+            "price_stale": price_at is not None and datetime.fromisoformat(price_at) < now - STALE_AFTER,
             "pct_avg": _pct(price, avg),
             "accounts": [{"id": p.key.account_id, "name": account_names.get(p.key.account_id, "?"),
                           "quantity": p.quantity, "cost": _units(p.cost)} for p in group],

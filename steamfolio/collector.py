@@ -3,6 +3,7 @@
 import logging
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from steamfolio.currencies import MAIN_CURRENCIES, USER_CURRENCIES, Currency, rate_currencies
 from steamfolio.db import utcnow
@@ -15,6 +16,8 @@ log = logging.getLogger(__name__)
 
 # Столько отказов подряд — признак блокировки, дальше не мучаем Steam.
 MAX_CONSECUTIVE_FAILURES = 5
+# Сбор раз в 6 часов (+ случайная задержка и время самого сбора): цена старше — устарела.
+STALE_AFTER = timedelta(hours=7)
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,24 @@ def run_on_demand(conn: sqlite3.Connection, market: Market, wanted: list[Target]
         raise
     _finish(conn, run_id, "ok" if ok == total else "partial" if ok else "failed", total, ok, False, problems)
     return run_id
+
+
+def stale_targets(conn: sqlite3.Connection, max_age: timedelta = STALE_AFTER, limit: int = 10) -> list[Target]:
+    """Предметы портфеля и ордеров, у которых цены нет или она старше max_age (например, позиция вернулась
+    в портфель после удаления продажи или отката, а плановые сборы её пропускали)."""
+    border = (datetime.now(UTC) - max_age).isoformat(timespec="seconds")
+    result = []
+    for target in targets(conn):
+        stale = tuple(
+            c for c in target.currencies
+            if (conn.execute(
+                "SELECT MAX(taken_at) FROM price_snapshots WHERE market_hash_name = ? AND currency = ?",
+                (target.market_hash_name, int(c)),
+            ).fetchone()[0] or "") < border
+        )
+        if stale:
+            result.append(Target(target.market_hash_name, stale))
+    return result[:limit]
 
 
 def missing_prices(conn: sqlite3.Connection, item: str, currency: Currency) -> Target | None:

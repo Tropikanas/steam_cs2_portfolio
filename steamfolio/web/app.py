@@ -194,24 +194,25 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         fx = FxResolver(conn) if cbr_fetch is None else FxResolver(conn, cbr_fetch)
         return Journal(conn, fx, PORTFOLIO_ID, user["id"])
 
-    def fetch_prices_now(item: str, cur: Currency) -> None:
+    def fetch_prices_now() -> None:
+        """Сразу после действия: цены, которых нет или которые устарели (новый предмет, вернувшаяся позиция)."""
         if not on_demand_prices:
             return
         with _fetch_lock:
             conn = db.connect(settings.db_path)
             try:
-                target = collector.missing_prices(conn, item, cur)
+                wanted = collector.stale_targets(conn)
                 http = SteamHttp(settings.request_delay, settings.proxy)
                 try:
-                    if target is not None:
-                        collector.run_on_demand(conn, Market(conn, http), [target])
+                    if wanted:
+                        collector.run_on_demand(conn, Market(conn, http), wanted)
                     # Покупка задним числом — сразу подтягиваем историю для оценки стоимости в прошлом.
                     ops = [Op.from_row(r) for r in conn.execute("SELECT * FROM operations ORDER BY id")]
                     history.backfill(conn, http, ops, limit=3)
                 finally:
                     http.close()
             except Exception:
-                log.exception("Не удалось сразу получить цену %r", item)
+                log.exception("Не удалось сразу получить цены")
             finally:
                 conn.close()
 
@@ -333,7 +334,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         cur = currency(body.currency)
         op_id = journal(conn, user).buy(body.item, body.account_id, cur, body.quantity, money(body.price),
                                         body.date, body.comment.strip(), rate(body.fx_rate))
-        background.add_task(fetch_prices_now, body.item, cur)
+        background.add_task(fetch_prices_now)
         return {"op_id": op_id}
 
     @app.post("/api/sell")
@@ -390,7 +391,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         cur = currency(body.currency)
         order_id = journal(conn, user).place_order(body.item, body.account_id, cur, body.quantity,
                                                    money(body.price), body.comment.strip())
-        background.add_task(fetch_prices_now, body.item, cur)
+        background.add_task(fetch_prices_now)
         return {"order_id": order_id}
 
     @app.post("/api/orders/{order_id}/fill")
@@ -451,17 +452,21 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         return views.preview(conn, result, j.ops(), PORTFOLIO_ID)
 
     @app.post("/api/journal/{op_id}/cancel")
-    def journal_cancel(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
+    # Откат, возврат, изменение и удаление могут вернуть позицию в портфель — её цену подтягиваем сразу.
+    def journal_cancel(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
         journal(conn, user).cancel(op_id)
+        background.add_task(fetch_prices_now)
         return {"ok": True}
 
     @app.post("/api/journal/{op_id}/restore")
-    def journal_restore(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
+    def journal_restore(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
         journal(conn, user).restore(op_id)
+        background.add_task(fetch_prices_now)
         return {"ok": True}
 
     @app.post("/api/journal/{op_id}/edit")
-    def journal_edit(op_id: int, body: EditIn, conn: Conn, user: User) -> dict[str, Any]:
+    def journal_edit(op_id: int, body: EditIn, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
+        background.add_task(fetch_prices_now)
         j = journal(conn, user)
         current = j.current_op(op_id)
         changes: dict[str, Any] = {}
@@ -488,8 +493,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         return {"op_id": j.edit(op_id, **changes)}
 
     @app.post("/api/journal/{op_id}/delete")
-    def journal_delete(op_id: int, conn: Conn, user: User) -> dict[str, Any]:
-        return {"op_id": journal(conn, user).delete(op_id)}
+    def journal_delete(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
+        op_id = journal(conn, user).delete(op_id)
+        background.add_task(fetch_prices_now)
+        return {"op_id": op_id}
 
     # ---------- API: настройки ----------
 

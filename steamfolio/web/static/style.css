@@ -143,6 +143,7 @@ th.sticky-2, td.sticky-2 { position: sticky; left: 44px; z-index: 1; box-shadow:
 th.sticky-1, th.sticky-2 { z-index: 2; }
 td.actions { white-space: nowrap; }
 td.actions button + button { margin-left: 4px; }
+.stale { color: var(--muted); text-decoration: underline dotted; cursor: help; }
 button.danger { color: var(--error); }
 button.danger:hover { background: var(--error-bg); }
 button.icon-btn { padding: 3px 5px; line-height: 0; vertical-align: middle; }

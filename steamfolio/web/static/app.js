@@ -10,8 +10,9 @@ const SF = (() => {
   // Календарь — кнопкой справа. Само input[type=date] остаётся скрытым: в нём значение (ГГГГ-ММ-ДД)
   // для форм и фильтров, и из него открывается календарь браузера.
   const CALENDAR_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>';
-  const DATE_SEGMENTS = [[0, 2, "дд"], [3, 5, "мм"], [6, 10, "гггг"]];
-  const DATE_BLANK = "дд.мм.гггг";
+  const DATE_BLANKS = ["дд", "мм", "гггг"];
+  const DATE_WIDTHS = [2, 2, 4];
+  const DATE_BLANK = DATE_BLANKS.join(".");
   const valueProp = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
 
   function enhanceDate(native) {
@@ -45,7 +46,7 @@ const SF = (() => {
 
     let seg = 0, typed = "";  // выбранный блок и набранные в нём цифры
     const fromIso = (iso) => iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "";
-    const show = () => { text.value = fromIso(valueProp.get.call(native)); };
+    const show = () => { text.value = fromIso(valueProp.get.call(native)); typed = ""; };
     // Программная запись в скрытое поле (сброс фильтров, подстановка значения) — видна и в тексте.
     Object.defineProperty(native, "value", {
       configurable: true,
@@ -54,14 +55,27 @@ const SF = (() => {
     });
     show();
 
-    const select = () => {
-      const [a, b] = DATE_SEGMENTS[seg];
-      text.setSelectionRange(a, b);
+    // Блоки разделены точками и могут быть короче полной ширины, пока их набирают («2» в году, а не «0002»).
+    const parts = () => {
+      const p = (text.value || DATE_BLANK).split(".");
+      return p.length === 3 ? p : DATE_BLANKS.slice();
     };
-    const part = (i) => text.value.slice(DATE_SEGMENTS[i][0], DATE_SEGMENTS[i][1]);
+    const range = (i) => {
+      const p = parts();
+      const start = p.slice(0, i).reduce((n, s) => n + s.length + 1, 0);
+      return [start, start + p[i].length];
+    };
+    const select = () => text.setSelectionRange(...range(seg));
+    const part = (i) => parts()[i];
     const put = (i, s) => {
-      const [a, b] = DATE_SEGMENTS[i];
-      text.value = text.value.slice(0, a) + s + text.value.slice(b);
+      const p = parts();
+      p[i] = s;
+      text.value = p.join(".");
+    };
+    // Уходя из дня или месяца, набранную одну цифру дополняем нулём: «5» → «05».
+    const finish = () => {
+      if (typed && seg < 2 && typed.length === 1) put(seg, typed.padStart(2, "0"));
+      typed = "";
     };
     // Текст → скрытое поле: полная правильная дата — записать и сообщить формам; иначе пусто.
     const commit = () => {
@@ -81,17 +95,16 @@ const SF = (() => {
         native.dispatchEvent(new Event("change", { bubbles: true }));
       }
     };
-    const pick = (i) => { seg = Math.max(0, Math.min(2, i)); typed = ""; select(); };
+    const pick = (i) => { finish(); commit(); seg = Math.max(0, Math.min(2, i)); select(); };
     text._pick = pick;
-    const segAt = (pos) => pos <= 2 ? 0 : pos <= 5 ? 1 : 2;
+    const segAt = (pos) => [0, 1, 2].find((i) => pos <= range(i)[1]) ?? 2;
 
     function digit(ch) {
       if (!text.value) text.value = DATE_BLANK;
       typed += ch;
-      const width = DATE_SEGMENTS[seg][1] - DATE_SEGMENTS[seg][0];
-      put(seg, typed.padStart(width, "0"));
+      put(seg, typed);  // только набранное, без нулей впереди
       // День: после «4»–«9» второй цифры не бывает; месяц — после «2»–«9»; год — после 4 цифр.
-      const full = typed.length >= width || (seg === 0 && +typed > 3) || (seg === 1 && +typed > 1);
+      const full = typed.length >= DATE_WIDTHS[seg] || (seg === 0 && +typed > 3) || (seg === 1 && +typed > 1);
       commit();
       if (full) { if (seg < 2) pick(seg + 1); else { typed = ""; select(); } } else select();
     }
@@ -119,9 +132,11 @@ const SF = (() => {
       clicking = false;
       pick(wasBlank ? 0 : segAt(text.selectionStart ?? 0));
     });
-    text.addEventListener("blur", () => { if (text.value === DATE_BLANK) text.value = ""; commit(); typed = ""; });
+    text.addEventListener("blur", () => { finish(); if (text.value === DATE_BLANK) text.value = ""; commit(); });
     text.addEventListener("keydown", (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;  // копировать/вставить
+      // Enter сохраняет форму или ячейку — набранная одна цифра дня/месяца должна успеть стать «05».
+      if (e.key === "Enter") { finish(); commit(); return; }
       if (/^\d$/.test(e.key)) { e.preventDefault(); digit(e.key); return; }
       const moves = { ArrowLeft: -1, ArrowRight: 1, ".": 1, "/": 1, ",": 1, "-": 1 };
       if (e.key in moves) { e.preventDefault(); pick(seg + moves[e.key]); return; }
@@ -129,7 +144,7 @@ const SF = (() => {
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (!text.value) return;
-        put(seg, DATE_SEGMENTS[seg][2]);
+        put(seg, DATE_BLANKS[seg]);
         typed = "";
         commit();
         select();

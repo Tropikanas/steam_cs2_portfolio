@@ -226,6 +226,9 @@ def test_summary_and_best_operations(conn, journal, acc):
     best = {b["item"]: b for b in stats.best_operations(ledger, journal.ops())}
     assert best[CASE]["profit_pct"] == 100.0 and best[CASE]["profit_usd"] == 12.5 and best[CASE]["months"] == 3.0
     assert best[AK]["profit_pct"] == 10.0 and best[AK]["profit_usd"] == 2.0
+    # 10% за 31 день — 117,74% годовых; дата покупки — для колонки перед датой продажи.
+    assert best[AK]["first_buy_date"] == "2026-01-10" and best[AK]["days"] == 31 and best[AK]["annual_pct"] == 117.74
+    assert best[CASE]["annual_pct"] == 405.56
 
 
 def test_history_daily_usd_from_eur():

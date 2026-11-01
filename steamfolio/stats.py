@@ -248,12 +248,15 @@ def best_operations(ledger: Ledger, ops: list[Op]) -> list[dict[str, Any]]:
         {
             "op_id": s.op_id,
             "date": s.op_date.isoformat(),
+            "first_buy_date": s.first_buy_date.isoformat() if s.first_buy_date else None,
             "item": s.key.market_hash_name,
             "currency": s.key.currency.name,
             "quantity": s.quantity,
             "profit": _usd(s.profit),
             "profit_usd": _usd(s.profit_usd),
             "profit_pct": round(float(s.profit_pct), 2),
+            "annual_pct": round(float(s.annual_pct), 2),
+            "days": s.days_held,
             "months": float(s.months),
         }
         for s in ledger.sales

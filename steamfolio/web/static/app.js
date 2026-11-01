@@ -24,11 +24,11 @@ const SF = (() => {
     unrealized: "Разница между текущей стоимостью имеющихся предметов и суммой вложений в них",
     totalInvested: "Сумма инвестиций в Steam за всю историю портфеля по курсу на дату покупки. Учитывает все предметы, которые когда-либо были куплены, а затем проданы или находятся в портфолио. Не учитывает удалённые покупки.",
     totalSold: "Сумма продаж за всю историю портфеля по курсу на дату продажи (без исключения объёма вложенных средств)",
-    totalProfit: "Реализованная/чистая прибыль - разница между грязной прибылью с продаж и ценой закупки",
+    totalProfit: "Разница между суммой продажи всех проданных предметов в портфеле и суммой их закупки.",
   };
   const signedUsd = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
   const statTile = (label, value, { tip = "", extra = "" } = {}) =>
-    `<div class="card stat"><div class="label">${tip ? `<span class="tip-icon" data-tip="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}">?</span>` : ""}${label}</div><div class="value">${value}</div>${extra}</div>`;
+    `<div class="card stat"><div class="label">${label}${tip ? `<span class="tip-icon" data-tip="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}">?</span>` : ""}</div><div class="value">${value}</div>${extra}</div>`;
   // Текущие позиции: одни и те же три плитки на Портфолио и в Статистике.
   const holdingTiles = (s, unpricedNote) =>
     statTile("Вложено в текущие позиции", money(s.invested_usd, "USD"), { tip: TIPS.invested })
@@ -1318,7 +1318,7 @@ const SF = (() => {
       el("summary-now").innerHTML = holdingTiles(s, (n) => `без цены: ${n}`);
       el("summary-all").innerHTML = statTile("Всего вложено", money(s.total_invested_usd, "USD"), { tip: TIPS.totalInvested })
         + statTile("Всего продано", money(s.total_sold_usd, "USD"), { tip: TIPS.totalSold })
-        + statTile("Всего получено прибыли", signed(s.total_profit_usd), { tip: TIPS.totalProfit });
+        + statTile(s.total_profit_usd < 0 ? "Реализованный убыток" : "Реализованная прибыль", signed(s.total_profit_usd), { tip: TIPS.totalProfit });
     }
 
     function renderLine() {
@@ -1442,13 +1442,15 @@ const SF = (() => {
 
     function renderBest() {
       document.querySelectorAll("#best-sort button").forEach((b) => b.classList.toggle("active", b.dataset.sort === bestSort));
-      const key = bestSort === "pct" ? "profit_pct" : "profit_usd";
+      const key = { pct: "profit_pct", annual: "annual_pct" }[bestSort] || "profit_usd";
       const all = [...data.sales].sort((a, b) => b[key] - a[key]);
+      // Без флажка «Все продажи» — ТОП-10 по выбранному показателю.
       const rows = el("best-all").checked ? all : all.slice(0, 10);
       el("best").innerHTML = !rows.length ? '<div class="empty-state">Продаж пока нет</div>'
-        : `<table><thead><tr><th>#</th><th>Предмет</th><th>Дата продажи</th><th class="num">Кол-во</th><th class="num">Прибыль, $</th><th class="num">Прибыль, %</th><th class="num">Срок, мес.</th></tr></thead><tbody>
+        : `<table><thead><tr><th>#</th><th>Предмет</th><th>Дата покупки</th><th>Дата продажи</th><th class="num">Кол-во</th><th class="num">Прибыль, $</th><th class="num">Прибыль, %</th><th class="num">Прибыль, % годовых</th><th class="num">Срок, мес.</th></tr></thead><tbody>
           ${rows.map((s, i) => `<tr><td class="muted">${i + 1}</td><td class="name">${esc(s.item)}<span class="type">${money(s.profit, s.currency)} в валюте строки</span></td>
-            <td>${date(s.date)}</td><td class="num">${num(s.quantity, 0)}</td><td class="num">${signed(s.profit_usd)}</td><td class="num">${pct(s.profit_pct)}</td><td class="num">${num(s.months, 1)}</td></tr>`).join("")}
+            <td>${s.first_buy_date ? date(s.first_buy_date) : "—"}</td><td>${date(s.date)}</td><td class="num">${num(s.quantity, 0)}</td><td class="num">${signed(s.profit_usd)}</td><td class="num">${pct(s.profit_pct)}</td>
+            <td class="num"><span title="За ${num(s.days, 0)} дн. владения">${pct(s.annual_pct)}</span></td><td class="num">${num(s.months, 1)}</td></tr>`).join("")}
           </tbody></table>`;
     }
 

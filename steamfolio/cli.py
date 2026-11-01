@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from steamfolio import alerts, auth, backup, catalog, collector, db, health, history, telegram
 from steamfolio.ledger import Op, replay
-from steamfolio.currencies import USER_CURRENCIES, Currency, format_minor, rate_currencies
+from steamfolio.currencies import RATE_CURRENCIES, USER_CURRENCIES, Currency, format_minor
 from steamfolio.market import Market, SteamHttp, listing_url, nameids
 from steamfolio.settings import Settings, load_settings
 
@@ -90,7 +90,8 @@ def cmd_report(conn: sqlite3.Connection, settings: Settings, args: argparse.Name
     by_item: dict[str, dict[int, int | None]] = {}
     for s in samples:
         by_item.setdefault(s["market_hash_name"], {})[s["currency"]] = s["lowest_sell"]
-    rate_cols = rate_currencies({Currency(s["currency"]) for s in samples})
+    sampled = {s["currency"] for s in samples}
+    rate_cols = [c for c in RATE_CURRENCIES if int(c) in sampled]
     header = f"  {'лот (самый дешёвый на продаже)':<42}" + "".join(f"{c.name:>13}" for c in (Currency.USD, *rate_cols))
     print(header)
     for name, prices in by_item.items():

@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from steamfolio.currencies import MAIN_CURRENCIES, USER_CURRENCIES, Currency, rate_currencies
+from steamfolio.currencies import MAIN_CURRENCIES, RATE_CURRENCIES, USER_CURRENCIES, Currency
 from steamfolio.db import utcnow
 from steamfolio.ledger import Op, replay
 from steamfolio.market import Market, MarketError
@@ -119,8 +119,8 @@ def missing_prices(conn: sqlite3.Connection, item: str, currency: Currency) -> T
 
 
 def _collect_rates(conn: sqlite3.Connection, market: Market, settings: Settings, run_id: int, problems: list[str]) -> bool:
-    # Курсы нужны для всех валют портфеля и ордеров: пересчёт цен в USD и запасной путь Market Beta.
-    currencies = rate_currencies({c for t in targets(conn) for c in t.currencies})
+    # Курсы — для всех валют Steam: вкладка «Курс валют», пересчёт цен в USD и запасной путь Market Beta.
+    currencies = RATE_CURRENCIES
     prices: dict[str, dict[Currency, int | None]] = {}
     for name in settings.rate_items:
         prices[name] = {}

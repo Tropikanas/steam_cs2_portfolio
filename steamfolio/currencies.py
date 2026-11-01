@@ -84,15 +84,9 @@ USER_CURRENCIES: tuple[Currency, ...] = MAIN_CURRENCIES + tuple(
     sorted((c for c in Currency if c not in MAIN_CURRENCIES), key=lambda c: c.name)
 )
 
-# Курс Steam к USD считается всегда для этих валют (EUR — валюта запасного пути Market Beta)
-# и дополнительно для каждой валюты, которая есть в портфеле или ордерах.
-BASE_RATE_CURRENCIES: tuple[Currency, ...] = (Currency.RUB, Currency.CNY, Currency.UAH, Currency.EUR)
-RATE_CURRENCIES = BASE_RATE_CURRENCIES  # для отчёта по умолчанию
-
-
-def rate_currencies(used: set[Currency] | frozenset[Currency] = frozenset()) -> tuple[Currency, ...]:
-    extra = sorted((c for c in used if c != Currency.USD and c not in BASE_RATE_CURRENCIES), key=lambda c: c.name)
-    return BASE_RATE_CURRENCIES + tuple(extra)
+# Курс Steam к USD считается для всех валют Steam, которые отдаёт площадка (вкладка «Курс валют»),
+# в порядке USER_CURRENCIES: основные, затем по коду.
+RATE_CURRENCIES: tuple[Currency, ...] = tuple(c for c in USER_CURRENCIES if c != Currency.USD)
 
 
 def format_minor(amount: int | None) -> str:

@@ -39,6 +39,11 @@ DEFAULT_RATE_ITEMS = (
     "★ M9 Bayonet | Doppler (Factory New)",
     "★ Karambit | Tiger Tooth (Factory New)",
     "★ Talon Knife | Doppler (Factory New)",
+    "★ M9 Bayonet | Marble Fade (Factory New)",
+    "★ M9 Bayonet | Tiger Tooth (Factory New)",
+    "★ Talon Knife | Marble Fade (Factory New)",
+    "★ Skeleton Knife | Fade (Factory New)",
+    "★ Butterfly Knife | Marble Fade (Factory New)",
 )
 
 

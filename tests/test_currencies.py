@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from steamfolio import collector, stats
-from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency, rate_currencies
+from steamfolio.currencies import NAMES, RATE_CURRENCIES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.fx import parse_cbr
 from steamfolio.ledger import replay
 
@@ -16,9 +16,10 @@ def test_all_steam_currencies_described():
     assert USER_CURRENCIES[:4] == (Currency.RUB, Currency.USD, Currency.CNY, Currency.UAH)
 
 
-def test_rate_currencies_add_used():
-    assert rate_currencies() == (Currency.RUB, Currency.CNY, Currency.UAH, Currency.EUR)
-    assert rate_currencies({Currency.USD, Currency.KZT, Currency.GBP, Currency.RUB})[4:] == (Currency.GBP, Currency.KZT)
+def test_rate_currencies_are_all_but_usd():
+    # курс считается для всех валют Steam: основные первыми, USD — база
+    assert RATE_CURRENCIES[:3] == (Currency.RUB, Currency.CNY, Currency.UAH)
+    assert Currency.USD not in RATE_CURRENCIES and len(RATE_CURRENCIES) == len(Currency) - 1
 
 
 def test_buy_in_any_steam_currency_and_collector_targets(conn, journal, fx, acc):

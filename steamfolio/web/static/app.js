@@ -17,6 +17,24 @@ const SF = (() => {
     const minus = v < 0 ? "−" : "";
     return cur === "USD" ? minus + "$" + n : minus + n + " " + (SIGN[cur] || cur);
   };
+  // Плитки сводки (Портфолио, Ордера, Статистика): одинаковый размер, подсказка при наведении.
+  const TIPS = {
+    invested: "Сумма инвестиций в предметы, находящиеся в данный момент в портфолио по курсу на дату покупки",
+    value: "Текущая стоимость предметов, находящиеся в данный момент в портфолио по текущему курсу (берётся по наивысшему ордеру на покупку на ТП Steam)",
+    unrealized: "Разница между текущей стоимостью имеющихся предметов и суммой вложений в них",
+    totalInvested: "Сумма инвестиций в Steam за всю историю портфеля по курсу на дату покупки. Учитывает все предметы, которые когда-либо были куплены, а затем проданы или находятся в портфолио. Не учитывает удалённые покупки.",
+    totalSold: "Сумма продаж за всю историю портфеля по курсу на дату продажи",
+    totalProfit: "Реализованная/чистая прибыль - разница между грязной прибылью с продаж и ценой закупки",
+  };
+  const signedUsd = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
+  const statTile = (label, value, { tip = "", extra = "" } = {}) =>
+    `<div class="card stat"${tip ? ` data-tip="${esc(tip)}" tabindex="0"` : ""}><div class="label">${label}</div><div class="value">${value}</div>${extra}</div>`;
+  // Текущие позиции: одни и те же три плитки на Портфолио и в Статистике.
+  const holdingTiles = (s, unpricedNote) =>
+    statTile("Вложено в текущие позиции", money(s.invested_usd, "USD"), { tip: TIPS.invested })
+    + statTile("Текущая стоимость", money(s.value_usd, "USD"), { tip: TIPS.value })
+    + statTile(s.profit_usd < 0 ? "Нереализованный убыток" : "Нереализованная прибыль", signedUsd(s.profit_usd),
+      { tip: TIPS.unrealized, extra: s.unpriced ? `<div class="small muted">${unpricedNote(s.unpriced)}</div>` : "" });
   const pct = (v) => v == null ? '<span class="muted">—</span>'
     : `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${num(v, 1)}%</span>`;
   const date = (iso) => iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "—";
@@ -708,11 +726,8 @@ const SF = (() => {
     async function reload() {
       const data = await api("GET", `/api/portfolio?collapse=${collapse.checked}&closed=${closed.checked}`);
       const s = data.summary;
-      document.getElementById("summary").innerHTML = closed.checked ? "" : `
-        <div class="card stat"><div class="label">Вложено</div><div class="value">${money(s.invested_usd, "USD")}</div></div>
-        <div class="card stat"><div class="label">Текущая стоимость</div><div class="value">${money(s.value_usd, "USD")}</div></div>
-        <div class="card stat"><div class="label">Нереализованная прибыль</div><div class="value ${s.profit_usd > 0 ? "up" : s.profit_usd < 0 ? "down" : ""}">${s.profit_usd > 0 ? "+" : ""}${money(s.profit_usd, "USD")}</div>
-          ${s.unpriced ? `<div class="small muted">без цены: ${s.unpriced} — учтены по себестоимости</div>` : ""}</div>`;
+      document.getElementById("summary").innerHTML = closed.checked ? ""
+        : holdingTiles(s, (n) => `без цены: ${n} — учтены по себестоимости`);
       // Продажи всегда по аккаунтам — «Свернуть аккаунты» к ним не относится.
       collapse.disabled = closed.checked;
       table = makeTable(document.getElementById("table"), columns(), {
@@ -982,9 +997,8 @@ const SF = (() => {
 
     async function reload() {
       const data = await api("GET", "/api/orders");
-      document.getElementById(ids.summary).innerHTML = `
-        <div class="card stat"><div class="label">Зарезервировано в ордерах</div><div class="value">${money(data.summary.reserved_usd, "USD")}</div>
-        <div class="small muted">по текущему курсу Steam</div></div>`;
+      document.getElementById(ids.summary).innerHTML = statTile("Зарезервировано в ордерах",
+        money(data.summary.reserved_usd, "USD"), { extra: '<div class="small muted">по текущему курсу Steam</div>' });
       table = table || makeTable(document.getElementById(ids.table), columns,
         { storageKey: "orders", empty: "Выставленных ордеров нет", counterId: ids.counter });
       table.setRows(data.rows);
@@ -1288,7 +1302,7 @@ const SF = (() => {
     const PALETTE = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2", "#ea580c", "#65a30d", "#dc2626", "#64748b"];
     const VALUE = "#2563eb", INVESTED = "#f59e0b", PROFIT = "#16a34a";
     const el = (id) => document.getElementById(id);
-    const signed = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
+    const signed = signedUsd;
     let data, lineChart, pieChart, typeNames = [];
     let period = +store.get("stats.period", "0");
     let chartCurrency = store.get("stats.currency", "TOTAL");
@@ -1299,16 +1313,12 @@ const SF = (() => {
     Chart.defaults.color = css("--muted");
     Chart.defaults.borderColor = css("--border");
 
-    const stat = (label, value, extra = "") => `<div class="card stat"><div class="label">${label}</div><div class="value">${value}</div>${extra}</div>`;
-
     function renderSummary() {
       const s = data.summary;
-      el("summary-now").innerHTML = stat("Вложено в текущие позиции", money(s.invested_usd, "USD"))
-        + stat("Текущая стоимость", money(s.value_usd, "USD"))
-        + stat("Нереализованная прибыль", signed(s.profit_usd), s.unpriced ? `<div class="small muted">без цены: ${s.unpriced}</div>` : "");
-      el("summary-all").innerHTML = stat("Всего вложено", money(s.total_invested_usd, "USD"))
-        + stat("Всего продано", money(s.total_sold_usd, "USD"))
-        + stat("Всего получено прибыли", signed(s.total_profit_usd));
+      el("summary-now").innerHTML = holdingTiles(s, (n) => `без цены: ${n}`);
+      el("summary-all").innerHTML = statTile("Всего вложено", money(s.total_invested_usd, "USD"), { tip: TIPS.totalInvested })
+        + statTile("Всего продано", money(s.total_sold_usd, "USD"), { tip: TIPS.totalSold })
+        + statTile("Всего получено прибыли", signed(s.total_profit_usd), { tip: TIPS.totalProfit });
     }
 
     function renderLine() {

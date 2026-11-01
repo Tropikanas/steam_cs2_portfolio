@@ -437,7 +437,7 @@ const SF = (() => {
 
   function requireAccounts(then) {
     if (activeAccounts().length) return then();
-    toast("Сначала добавьте аккаунт Steam (кнопка «Аккаунты»)", true);
+    toast("Сначала добавьте аккаунт Steam (кнопка «Список аккаунтов» на вкладке «Портфолио»)", true);
   }
 
   function accountsDialog(reload) {

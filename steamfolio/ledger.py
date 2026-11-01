@@ -253,21 +253,29 @@ def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
         if op.kind == "position_removed" and len(ledger.violations) == problems:
             removals.append((len(steps), RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity))
         steps.append((op, {k: (p.quantity, p.cost_usd, p.cost) for k, p in ledger.positions.items() if p.quantity > 0}))
-    for index, key, removed in removals:
-        left_to_remove = removed
-        for op, state in reversed(steps[:index]):
-            if left_to_remove <= 0:
-                break
+    def erase(index: int, key: RowKey, count: int) -> None:
+        """Убрать count штук строки key из остатков до операции index (назад, до их прихода)."""
+        for i in range(index - 1, -1, -1):
+            if count <= 0:
+                return
+            op, state = steps[i]
             if key in state:
                 qty, cost_usd, cost = state[key]
-                left = qty - left_to_remove
+                left = qty - count
                 if left > 0:
                     state[key] = (left, cost_usd * left / qty, cost * left / qty)  # по средней цене
                 else:
                     del state[key]
-            # До этого прихода его штук не было — их уже не вычитаем.
             if _brings_into(op, key):
-                left_to_remove -= min(left_to_remove, op.quantity)
+                # До этого прихода его штук здесь не было. Если они пришли переносом —
+                # до переноса они были на исходном аккаунте: убираем их и там.
+                came = min(count, op.quantity)
+                if op.kind == "transfer":
+                    erase(i, RowKey(op.market_hash_name, op.account_id, op.currency), came)
+                count -= came
+
+    for index, key, removed in removals:
+        erase(index, key, removed)
     result: list[tuple[date, dict[RowKey, Holding]]] = []
     for op, state in steps:
         if result and result[-1][0] == op.op_date:

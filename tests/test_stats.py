@@ -151,6 +151,16 @@ def test_removal_does_not_erase_earlier_purchases(journal, acc):
     assert by_day[D("2026-09-20")] == {CASE: 500}
 
 
+def test_removal_follows_transfer_to_source_account(journal, acc, acc2):
+    from steamfolio.ledger import daily_holdings
+
+    journal.buy(CASE, acc, RUB, 200, 8000, D("2026-09-02"))
+    journal.transfer(CASE, acc, acc2, RUB, 100, D("2026-09-10"))
+    journal.remove_position(CASE, acc2, RUB)  # перенесённые 100 — ошибочные
+    journal.remove_position(CASE, acc, RUB)  # и оставшиеся 100
+    assert daily_holdings(journal.ops()) == []  # на графике их не было никогда
+
+
 def test_removal_takes_latest_purchases_first(journal, acc):
     from steamfolio.ledger import daily_holdings
 

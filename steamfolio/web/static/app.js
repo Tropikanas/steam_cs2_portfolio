@@ -1313,6 +1313,7 @@ const SF = (() => {
     const signed = signedUsd;
     let data, lineChart, pieChart, typeNames = [];
     let period = +store.get("stats.period", "0");
+    let panEnd = null;  // конец окна графика, сдвинутый ползунком; null — по сегодняшний день
     let chartCurrency = store.get("stats.currency", "TOTAL");
     let bestSort = store.get("stats.best", "pct");
     let drill = null;
@@ -1332,7 +1333,6 @@ const SF = (() => {
     function renderLine() {
       const s = data.series;
       const cur = s.currency || "USD";
-      const min = period ? Date.now() - period * 86400000 : undefined;
       document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", +b.dataset.days === period));
       const axis = (v) => cur === "USD" ? "$" + num(v, 0) : `${num(v, 0)} ${SIGN[cur] || cur}`;
       // Оценка портфеля лежит слоем поверх реализованной прибыли: y = оценка + прибыль на этот момент,
@@ -1361,6 +1361,21 @@ const SF = (() => {
         ds("Вложено", s.invested, INVESTED, { stepped: "before", fill: false, borderWidth: 2.5 }),
       ].filter((d) => d.data.length);
       const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
+      // Окно периода: [конец − период, конец]; ползунок под графиком двигает конец окна в прошлое.
+      const xs = datasets.flatMap((d) => d.data.map((p) => p.x));
+      const first = xs.length ? Math.min(...xs) : Date.now();
+      const last = Math.max(Date.now(), ...xs);
+      const span = period * 86400000;
+      const pannable = period > 0 && last - first > span;
+      const end = pannable && panEnd != null ? Math.min(Math.max(panEnd, first + span), last) : last;
+      const min = period ? end - span : undefined;
+      const max = period ? end : undefined;
+      const slider = el("line-pan");
+      el("line-pan-box").classList.toggle("hidden", !pannable);
+      if (pannable) {
+        Object.assign(slider, { min: first + span, max: last, step: 3600000 });
+        slider.value = end;
+      }
       const config = {
         type: "line",
         data: { datasets },
@@ -1368,7 +1383,7 @@ const SF = (() => {
           maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
           interaction: { mode: "nearest", axis: "x", intersect: false },
           scales: {
-            x: { type: "linear", min, ticks: { callback: fmtDay, maxTicksLimit: 8 }, grid: { display: false } },
+            x: { type: "linear", min, max, ticks: { callback: fmtDay, maxTicksLimit: 8 }, grid: { display: false } },
             y: { beginAtZero: true, ticks: { callback: axis } },
           },
           plugins: {
@@ -1385,6 +1400,18 @@ const SF = (() => {
       };
       if (lineChart) lineChart.destroy();
       lineChart = new Chart(el("line"), config);
+      const showWindow = () => {
+        const x = lineChart.options.scales.x;
+        el("line-pan-label").textContent = `${fmtDay(x.min)} — ${fmtDay(x.max)}`;
+      };
+      if (pannable) showWindow();
+      slider.oninput = () => {
+        // В самом правом положении окно снова «прилипает» к сегодняшнему дню.
+        panEnd = +slider.value >= +slider.max ? null : +slider.value;
+        Object.assign(lineChart.options.scales.x, { min: +slider.value - span, max: +slider.value });
+        lineChart.update("none");
+        showWindow();
+      };
       const scope = chartCurrency === "TOTAL" ? "Все операции, суммы в USD по курсу на дату. "
         : `Только строки в ${cur}, суммы в ${cur} без пересчёта. `;
       el("line-note").textContent = !datasets.length
@@ -1485,6 +1512,7 @@ const SF = (() => {
     document.querySelectorAll("#period button").forEach((b) => b.onclick = () => {
       period = +b.dataset.days;
       store.set("stats.period", String(period));
+      panEnd = null;  // новый период — снова по сегодняшний день
       renderLine();
     });
     el("chart-currency").onchange = (e) => {

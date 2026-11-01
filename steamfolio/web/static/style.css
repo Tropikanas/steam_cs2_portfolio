@@ -103,16 +103,23 @@ main { padding: 16px; max-width: 1600px; margin: 0 auto; }
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   padding: 12px 16px; box-shadow: var(--shadow);
 }
-.stat { box-sizing: border-box; min-height: 88px; position: relative; }
-.stat[data-tip] { cursor: help; }
-.stat[data-tip]::after {
-  content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 30;
+.stat { box-sizing: border-box; min-height: 88px; }
+.stat .label { display: flex; align-items: center; gap: 6px; }
+/* Значок (?) в левом верхнем углу плитки — подсказка только при наведении на него. */
+.tip-icon {
+  position: relative; flex: none; width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid var(--muted); color: var(--muted); font-size: 10px; font-weight: 600; line-height: 13px;
+  text-align: center; cursor: help; user-select: none;
+}
+.tip-icon:hover, .tip-icon:focus { color: var(--text); border-color: var(--text); outline: none; }
+.tip-icon::after {
+  content: attr(data-tip); position: absolute; left: -6px; top: calc(100% + 8px); z-index: 30; text-align: left;
   width: 300px; max-width: 80vw; padding: 8px 10px; border-radius: 8px;
   background: var(--text); color: var(--surface); font-size: 12px; line-height: 1.4; font-weight: 400;
   box-shadow: var(--shadow); opacity: 0; visibility: hidden; transition: opacity .12s;
   pointer-events: none;
 }
-.stat[data-tip]:hover::after, .stat[data-tip]:focus::after { opacity: 1; visibility: visible; transition-delay: .15s; }
+.tip-icon:hover::after, .tip-icon:focus::after { opacity: 1; visibility: visible; transition-delay: .15s; }
 .stat .label { color: var(--muted); font-size: 12px; }
 .stat .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
 

@@ -23,12 +23,12 @@ const SF = (() => {
     value: "Текущая стоимость предметов, находящиеся в данный момент в портфолио по текущему курсу (берётся по наивысшему ордеру на покупку на ТП Steam)",
     unrealized: "Разница между текущей стоимостью имеющихся предметов и суммой вложений в них",
     totalInvested: "Сумма инвестиций в Steam за всю историю портфеля по курсу на дату покупки. Учитывает все предметы, которые когда-либо были куплены, а затем проданы или находятся в портфолио. Не учитывает удалённые покупки.",
-    totalSold: "Сумма продаж за всю историю портфеля по курсу на дату продажи",
+    totalSold: "Сумма продаж за всю историю портфеля по курсу на дату продажи (без исключения объёма вложенных средств)",
     totalProfit: "Реализованная/чистая прибыль - разница между грязной прибылью с продаж и ценой закупки",
   };
   const signedUsd = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${money(v, "USD")}</span>`;
   const statTile = (label, value, { tip = "", extra = "" } = {}) =>
-    `<div class="card stat"${tip ? ` data-tip="${esc(tip)}" tabindex="0"` : ""}><div class="label">${label}</div><div class="value">${value}</div>${extra}</div>`;
+    `<div class="card stat"><div class="label">${tip ? `<span class="tip-icon" data-tip="${esc(tip)}" tabindex="0" aria-label="${esc(tip)}">?</span>` : ""}${label}</div><div class="value">${value}</div>${extra}</div>`;
   // Текущие позиции: одни и те же три плитки на Портфолио и в Статистике.
   const holdingTiles = (s, unpricedNote) =>
     statTile("Вложено в текущие позиции", money(s.invested_usd, "USD"), { tip: TIPS.invested })

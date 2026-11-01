@@ -141,7 +141,7 @@ const SF = (() => {
   }
 
   // filters — общий объект страницы: значения фильтров переживают перезагрузку данных.
-  function makeTable(container, columns, { storageKey, empty, filters = {}, rowClass, rowId, extraFilter, defaultSort = null }) {
+  function makeTable(container, columns, { storageKey, empty, filters = {}, rowClass, rowId, extraFilter, defaultSort = null, counterId = "rows-count" }) {
     let rows = [];
     let sort = JSON.parse(store.get(storageKey + ".sort", "null") || "null") || defaultSort;
 
@@ -167,7 +167,7 @@ const SF = (() => {
         `<td class="${c.cls || ""}">${c.html(r)}</td>`).join("")}</tr>`).join("")
         : `<tr><td colspan="${columns.length}" class="empty-state">${rows.length ? "Ничего не найдено — измените фильтры" : empty}</td></tr>`;
       visible.forEach((r, i) => columns.forEach((c, j) => c.bind && c.bind(tbody.rows[i].cells[j], r)));
-      const counter = document.getElementById("rows-count");
+      const counter = document.getElementById(counterId);
       if (counter) counter.textContent = rows.length ? `Строк: ${visible.length}${visible.length !== rows.length ? " из " + rows.length : ""}` : "";
       container.querySelectorAll("th[data-id]").forEach((th) => {
         th.querySelector(".arrow").textContent = sort && sort.id === th.dataset.id ? (sort.dir > 0 ? "▲" : "▼") : "";
@@ -468,7 +468,23 @@ const SF = (() => {
 
   function portfolioPage() {
     const collapse = document.getElementById("opt-collapse");
-    const closed = document.getElementById("opt-closed");
+    // Вкладки страницы: «Текущий портфель», «Закрытые позиции», «Ордера» (выбранная — в адресе: #closed, #orders).
+    const closed = { checked: false };
+    const orders = ordersPage({ summary: "o-summary", table: "o-table", counter: "o-rows-count",
+      btnOrder: "btn-order", btnAccounts: "o-btn-accounts" });
+    function showPane() {
+      const pane = ["closed", "orders"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "positions";
+      document.querySelectorAll("#subtabs a").forEach((a) => a.classList.toggle("active", a.dataset.pane === pane));
+      document.getElementById("pane-positions").classList.toggle("hidden", pane === "orders");
+      document.getElementById("pane-orders").classList.toggle("hidden", pane !== "orders");
+      if (pane === "orders") { orders.reload(); return; }
+      closed.checked = pane === "closed";
+      document.getElementById("btn-buy").classList.toggle("hidden", closed.checked);
+      document.getElementById("collapse-toggle").classList.toggle("hidden", closed.checked);
+      document.getElementById("edit-hint").classList.toggle("hidden", closed.checked);
+      reload();
+    }
+    window.addEventListener("hashchange", showPane);
     collapse.checked = store.get("collapse", "0") === "1";
     const filters = {};
     let table;
@@ -503,11 +519,15 @@ const SF = (() => {
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
       { id: "item", title: "Название", key: "item", cls: "name sticky-2", filter: true, text: (r) => r.item + " " + r.type,
         html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a><span class="type">${esc(r.type)}</span>` },
-      { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
+      { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0),
+        bind: (td, r) => bindEdit(td, r, "quantity") },
       { id: "avg", title: "Средняя цена", key: "avg_price", cls: "num", numeric: true, filter: true,
-        html: (r) => `<span title="${r.avg_price_usd != null ? "в USD по курсам дат покупок: " + money(r.avg_price_usd, "USD", true) : ""}">${money(r.avg_price, r.currency, true)}</span>` },
-      { id: "first", title: "Первая покупка", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
-      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
+        html: (r) => `<span title="${r.avg_price_usd != null ? "в USD по курсам дат покупок: " + money(r.avg_price_usd, "USD", true) : ""}">${money(r.avg_price, r.currency, true)}</span>`,
+        bind: (td, r) => bindEdit(td, r, "price") },
+      { id: "first", title: "Первая покупка", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date),
+        bind: (td, r) => bindEdit(td, r, "date") },
+      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency,
+        bind: (td, r) => bindEdit(td, r, "currency") },
       { id: "price", title: "Текущая цена", key: "price", cls: "num", numeric: true, filter: true,
         html: (r) => r.price_stale
           ? `<span class="stale" title="Цена устарела: снята ${esc(dateTime(r.price_at))}. Обновится при ближайшем сборе цен (раз в 6 часов)">${money(r.price, r.currency)} ⏱</span>`
@@ -517,7 +537,8 @@ const SF = (() => {
       { id: "pct_7d", title: "% неделя", key: "pct_7d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_7d) },
       { id: "pct_30d", title: "% месяц", key: "pct_30d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_30d) },
       { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames,
-        values: (r) => r.account_id != null ? [r.account] : r.accounts.map((a) => a.name), html: (r) => esc(r.account) },
+        values: (r) => r.account_id != null ? [r.account] : r.accounts.map((a) => a.name), html: (r) => esc(r.account),
+        bind: (td, r) => bindEdit(td, r, "account_id") },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true,
         html: (r) => collapse.checked || closed.checked ? esc(r.comment)
           : `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`,
@@ -530,6 +551,126 @@ const SF = (() => {
           td.querySelectorAll("button").forEach((b) => b.onclick = () => actions[b.dataset.a](r));
         } },
     ];
+
+    // ---------- правка покупок из портфеля (двойной щелчок) ----------
+    // Строка из одной покупки правится прямо в ячейке; из нескольких — сначала выбирается покупка.
+    // Любая правка — это «покупка изменена» в журнале: средняя, прибыль и графики пересчитываются, правку можно откатить.
+
+    const FILL_FIELDS = ["date", "quantity", "price"];  // у покупки по ордеру валюту и аккаунт задаёт ордер
+
+    function bindEdit(td, r, field) {
+      td.classList.add("editable");
+      td.title = td.title || "Двойной щелчок — изменить";
+      td.ondblclick = (e) => {
+        e.preventDefault();
+        if (r.single_op) return editInCell(td, r.single_op, field);
+        if (!r.buys.length) {
+          toast("Эта строка получена переносом с другого аккаунта — измените исходную покупку или перенос в «Журнале операций»", true);
+          return;
+        }
+        if (r.buys.length === 1) return editBuyForm(r.buys[0], field);
+        pickBuyForm(r, field);
+      };
+    }
+
+    // Активные аккаунты и текущий аккаунт покупки (даже если он скрыт) — чтобы список не подменил его молча.
+    const accountChoices = (b) => meta.accounts.filter((a) => !a.hidden || a.id === b.account_id);
+
+    function editValue(b, field) {
+      return field === "price" ? String(b.price).replace(".", ",") : field === "account_id" ? b.account_id : b[field];
+    }
+
+    async function saveEdit(b, changes) {
+      await api("POST", `/api/journal/${b.op_id}/edit`, changes);
+      toast("Покупка изменена — запись в журнале");
+      await reload();
+    }
+
+    function editInCell(td, b, field) {
+      if (b.kind === "order_filled" && !FILL_FIELDS.includes(field)) {
+        toast("Это покупка по ордеру — её валюту и аккаунт задаёт ордер", true);
+        return;
+      }
+      const control = field === "currency" || field === "account_id" ? document.createElement("select") : document.createElement("input");
+      if (field === "currency") control.innerHTML = currencyOptions().map((o) => `<option value="${esc(o.value)}">${esc(o.value)}</option>`).join("");
+      if (field === "account_id") control.innerHTML = accountChoices(b).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
+      if (field === "date") { control.type = "date"; control.max = today(); }
+      if (field === "quantity") { control.type = "number"; control.min = 1; control.step = 1; }
+      if (field === "price") control.inputMode = "decimal";
+      control.value = editValue(b, field);
+      control.className = "cell-editor";
+      td.ondblclick = null;
+      td.replaceChildren(control);
+      control.focus();
+      if (control.select) control.select();
+      let done = false;
+      const finish = async (commit) => {
+        if (done) return;
+        done = true;
+        const value = control.value.trim();
+        if (!commit || value === "" || String(value) === String(editValue(b, field))) { table.render(); return; }
+        const changes = { [field]: field === "quantity" || field === "account_id" ? +value : value };
+        try {
+          await saveEdit(b, changes);
+        } catch (e) {
+          toast(e.message + (e.violations && e.violations.length ? ": " + e.violations.join("; ") : ""), true);
+          table.render();
+        }
+      };
+      control.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") finish(true);
+        if (e.key === "Escape") finish(false);
+      });
+      control.addEventListener("blur", () => finish(true));
+      if (control.tagName === "SELECT") control.addEventListener("change", () => finish(true));
+    }
+
+    function pickBuyForm(r, field) {
+      openForm({
+        title: `Какую покупку изменить: ${r.item}`,
+        submit: "Далее",
+        layout: [{ name: "op", label: `Строка собрана из ${r.buys.length} покупок`, type: "select",
+          options: r.buys.map((b) => ({ value: b.op_id,
+            label: `${date(b.date)} · ${num(b.quantity, 0)} шт. по ${money(b.price, b.currency)} · ${b.account}${b.kind === "order_filled" ? " · по ордеру" : ""}` })) }],
+        onSubmit: async (v) => {
+          // Форма правки открывается после закрытия этой.
+          setTimeout(() => editBuyForm(r.buys.find((b) => b.op_id === +v.op), field), 0);
+        },
+      });
+    }
+
+    function editBuyForm(b, focus) {
+      const fill = b.kind === "order_filled";
+      const layout = [
+        [{ name: "date", label: "Дата покупки", type: "date", value: b.date, attrs: `max="${today()}"` },
+          { name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: b.quantity }],
+        { name: "price", label: `Цена за штуку, ${b.currency}`, inputmode: "decimal", value: String(b.price).replace(".", ","),
+          attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' },
+      ];
+      if (!fill) {
+        layout.push([{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: b.currency },
+          { name: "account_id", label: "Аккаунт", type: "select",
+            options: accountChoices(b).map((a) => ({ value: a.id, label: a.name })), value: b.account_id }]);
+      }
+      layout.push({ name: "_note", type: "static", label: "", required: false, html: `<span class="muted small">Покупка #${b.op_id} от ${date(b.date)}.
+        ${fill ? "Покупка по ордеру: валюту и аккаунт задаёт ордер. " : ""}Изменение запишется в журнал как «покупка изменена» — его можно откатить.</span>` });
+      const ctx = openForm({
+        title: "Изменить покупку",
+        layout,
+        onSubmit: async (v) => {
+          const changes = {};
+          if (v.date !== b.date) changes.date = v.date;
+          if (+v.quantity !== b.quantity) changes.quantity = +v.quantity;
+          if (parseNum(v.price) !== b.price) changes.price = v.price;
+          if (!fill && v.currency !== b.currency) changes.currency = v.currency;
+          if (!fill && +v.account_id !== b.account_id) changes.account_id = +v.account_id;
+          if (!Object.keys(changes).length) return;
+          await saveEdit(b, changes);
+        },
+      });
+      const target = ctx.el(focus);
+      if (target) { target.focus(); if (target.select) target.select(); }
+    }
 
     function bindComment(td, r) {
       const span = td.querySelector(".comment-edit");
@@ -770,16 +911,15 @@ const SF = (() => {
     }
 
     collapse.addEventListener("change", () => { store.set("collapse", collapse.checked ? "1" : "0"); reload(); });
-    closed.addEventListener("change", reload);
     document.getElementById("btn-excel").onclick = (e) => exportExcel(e.currentTarget);
     document.getElementById("btn-buy").onclick = () => requireAccounts(buyForm);
     document.getElementById("btn-accounts").onclick = () => accountsDialog(reload);
-    loadMeta().then(reload).catch((e) => toast(e.message, true));
+    loadMeta().then(showPane).catch((e) => toast(e.message, true));
   }
 
-  // ---------- «Ордера» ----------
+  // ---------- вкладка «Ордера» страницы «Портфолио» ----------
 
-  function ordersPage() {
+  function ordersPage(ids) {
     let table;
     const columns = [
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
@@ -803,10 +943,11 @@ const SF = (() => {
 
     async function reload() {
       const data = await api("GET", "/api/orders");
-      document.getElementById("summary").innerHTML = `
+      document.getElementById(ids.summary).innerHTML = `
         <div class="card stat"><div class="label">Зарезервировано в ордерах</div><div class="value">${money(data.summary.reserved_usd, "USD")}</div>
         <div class="small muted">по текущему курсу Steam</div></div>`;
-      table = table || makeTable(document.getElementById("table"), columns, { storageKey: "orders", empty: "Выставленных ордеров нет" });
+      table = table || makeTable(document.getElementById(ids.table), columns,
+        { storageKey: "orders", empty: "Выставленных ордеров нет", counterId: ids.counter });
       table.setRows(data.rows);
     }
 
@@ -899,9 +1040,9 @@ const SF = (() => {
       } catch (e) { toast(e.message, true); }
     }
 
-    document.getElementById("btn-order").onclick = () => requireAccounts(orderForm);
-    document.getElementById("btn-accounts").onclick = () => accountsDialog(reload);
-    loadMeta().then(reload).catch((e) => toast(e.message, true));
+    document.getElementById(ids.btnOrder).onclick = () => requireAccounts(orderForm);
+    document.getElementById(ids.btnAccounts).onclick = () => accountsDialog(reload);
+    return { reload: () => reload().catch((e) => toast(e.message, true)) };
   }
 
   // ---------- «Журнал операций» ----------

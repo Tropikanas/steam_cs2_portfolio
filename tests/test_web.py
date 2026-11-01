@@ -169,6 +169,27 @@ def test_stats_series_by_currency(client):
     assert len(client.get("/api/meta").json()["currencies"]) == 39
 
 
+def test_portfolio_tabs_and_row_purchases(client):
+    login(client)
+    assert client.get("/orders", follow_redirects=False).headers["location"] == "/portfolio#orders"
+    page = client.get("/portfolio").text
+    assert "Текущий портфель" in page and "Закрытые позиции" in page and 'id="o-table"' in page
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    acc2 = client.post("/api/accounts", json={"name": "B"}).json()["id"]
+    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
+    one = client.post("/api/buy", json={**trade, "quantity": 5, "price": "10"}).json()["op_id"]
+    [row] = client.get("/api/portfolio").json()["rows"]
+    assert row["single_op"]["op_id"] == one and [b["op_id"] for b in row["buys"]] == [one]
+    # правка из ячейки — это правка покупки в журнале
+    assert client.post(f"/api/journal/{one}/edit", json={"quantity": 7}).status_code == 200
+    two = client.post("/api/buy", json={**trade, "quantity": 1, "price": "20"}).json()["op_id"]
+    [row] = client.get("/api/portfolio").json()["rows"]
+    assert row["quantity"] == 8 and row["single_op"] is None and [b["op_id"] for b in row["buys"]] == [one, two]
+    client.post("/api/transfer", json={**trade, "from_account_id": acc, "to_account_id": acc2, "quantity": 2})
+    moved = next(r for r in client.get("/api/portfolio").json()["rows"] if r["account_id"] == acc2)
+    assert moved["buys"] == [] and moved["single_op"] is None  # получена переносом
+
+
 def test_delete_closed_row_returns_to_portfolio(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]

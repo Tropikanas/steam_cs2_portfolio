@@ -1,16 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Портфолио · Портфолио Steam{% endblock %}
 {% block content %}
-<section class="summary" id="summary"></section>
-<div class="toolbar">
-  <button class="primary" id="btn-buy">Добавить закупленное</button>
-  <button id="btn-accounts">Аккаунты</button>
-  <label class="toggle"><input type="checkbox" id="opt-collapse"> Свернуть аккаунты</label>
-  <label class="toggle"><input type="checkbox" id="opt-closed"> Закрытые позиции</label>
-  <span class="spacer"></span>
-  <span class="muted small" id="rows-count"></span>
-  <button id="btn-excel" title="Скачать портфель, закрытые позиции, ордера и журнал одним файлом">Выгрузить в Excel</button>
+<nav class="subtabs" id="subtabs" role="tablist">
+  <a href="#positions" data-pane="positions" role="tab">Текущий портфель</a>
+  <a href="#closed" data-pane="closed" role="tab">Закрытые позиции</a>
+  <a href="#orders" data-pane="orders" role="tab">Ордера</a>
+</nav>
+
+<div id="pane-positions">
+  <section class="summary" id="summary"></section>
+  <div class="toolbar">
+    <button class="primary" id="btn-buy">Добавить закупленное</button>
+    <button id="btn-accounts">Аккаунты</button>
+    <label class="toggle" id="collapse-toggle"><input type="checkbox" id="opt-collapse"> Свернуть аккаунты</label>
+    <span class="spacer"></span>
+    <span class="muted small" id="rows-count"></span>
+    <button id="btn-excel" title="Скачать портфель, закрытые позиции, ордера и журнал одним файлом">Выгрузить в Excel</button>
+  </div>
+  <p class="muted small hint" id="edit-hint">Двойной щелчок по количеству, средней цене, дате первой покупки, валюте или аккаунту — изменить покупку.</p>
+  <div class="table-wrap" id="table"></div>
 </div>
-<div class="table-wrap" id="table"></div>
+
+<div id="pane-orders" class="hidden">
+  <section class="summary" id="o-summary"></section>
+  <div class="toolbar">
+    <button class="primary" id="btn-order">Новый ордер</button>
+    <button id="o-btn-accounts">Аккаунты</button>
+    <span class="spacer"></span>
+    <span class="muted small" id="o-rows-count"></span>
+  </div>
+  <div class="table-wrap" id="o-table"></div>
+</div>
 {% endblock %}
 {% block scripts %}<script>SF.portfolioPage();</script>{% endblock %}

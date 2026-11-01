@@ -278,9 +278,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     def portfolio_page(request: Request, user: User):
         return templates.TemplateResponse(request, "portfolio.html", {"tab": "portfolio", "user": user})
 
-    @app.get("/orders", response_class=HTMLResponse)
-    def orders_page(request: Request, user: User):
-        return templates.TemplateResponse(request, "orders.html", {"tab": "orders", "user": user})
+    @app.get("/orders")
+    def orders_page(user: User):
+        # Ордера — вкладка страницы «Портфолио».
+        return RedirectResponse("/portfolio#orders", status_code=303)
 
     @app.get("/stats", response_class=HTMLResponse)
     def stats_page(request: Request, user: User):
@@ -307,8 +308,8 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
 
     @app.get("/api/portfolio")
     def portfolio_api(conn: Conn, user: User, collapse: bool = False, closed: bool = False) -> dict[str, Any]:
-        ledger = journal(conn, user).ledger()
-        return views.portfolio(conn, ledger, collapse=collapse, closed=closed, portfolio_id=PORTFOLIO_ID)
+        ops = journal(conn, user).ops()
+        return views.portfolio(conn, replay(ops), collapse=collapse, closed=closed, portfolio_id=PORTFOLIO_ID, ops=ops)
 
     @app.get("/api/orders")
     def orders_api(conn: Conn, user: User) -> dict[str, Any]:

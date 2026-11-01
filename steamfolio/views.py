@@ -81,12 +81,32 @@ def last_update(conn: sqlite3.Connection) -> str | None:
     ).fetchone()[0]
 
 
+def _row_ops(ops: list[Op]) -> dict[tuple[str, int, Currency], list[Op]]:
+    """Действующие операции, из которых сложилась каждая строка (предмет, аккаунт, валюта)."""
+    result: dict[tuple[str, int, Currency], list[Op]] = {}
+    for op in effective_ops(ops):
+        if op.kind in ("buy", "order_filled", "sell", "position_removed"):
+            result.setdefault((op.market_hash_name, op.account_id, op.currency), []).append(op)
+        elif op.kind == "transfer":
+            for account in (op.account_id, op.to_account_id):
+                result.setdefault((op.market_hash_name, account, op.currency), []).append(op)
+    return result
+
+
+def _buy_info(op: Op, account_names: dict[int, str]) -> dict[str, Any]:
+    return {"op_id": op.id, "kind": op.kind, "date": op.op_date.isoformat(), "quantity": op.quantity,
+            "price": _units(op.price), "currency": op.currency.name, "account_id": op.account_id,
+            "account": account_names.get(op.account_id, "?")}
+
+
 def portfolio(
     conn: sqlite3.Connection, ledger: Ledger, *, collapse: bool = False, closed: bool = False,
-    portfolio_id: int = 1, now: datetime | None = None,
+    portfolio_id: int = 1, now: datetime | None = None, ops: list[Op] | None = None,
 ) -> dict[str, Any]:
+    """ops — журнал: с ним у строк есть покупки для редактирования (buys, single_op)."""
     if closed:
         return sales(conn, ledger, portfolio_id)
+    row_ops = _row_ops(ops) if ops is not None else {}
     now = now or datetime.now(UTC)
     prices = Prices(conn, now)
     rates = latest_rates(conn)
@@ -139,6 +159,12 @@ def portfolio(
         }
         for column, delta in PERIODS.items():
             row[column] = _pct(price, prices.at(name, currency, now - delta))
+        # Покупки строки с последнего открытия позиции — их можно править из портфеля.
+        history = [op for p in group for op in row_ops.get(p.key, []) if op.op_date >= p.first_buy_date]
+        buys = [op for op in history if op.kind in ("buy", "order_filled")]
+        row["buys"] = [_buy_info(op, account_names) for op in sorted(buys, key=lambda o: o.sort_key)]
+        # Строка ровно из одной покупки правится прямо в ячейке.
+        row["single_op"] = _buy_info(buys[0], account_names) if not collapse and len(history) == 1 and buys else None
         if quantity:
             invested += cost_usd
             price_usd, _ = prices.latest(name, Currency.USD)

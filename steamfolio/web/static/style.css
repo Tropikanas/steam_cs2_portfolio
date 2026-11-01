@@ -144,6 +144,16 @@ th.sticky-1, th.sticky-2 { z-index: 2; }
 td.actions { white-space: nowrap; }
 td.actions button + button { margin-left: 4px; }
 .stale { color: var(--muted); text-decoration: underline dotted; cursor: help; }
+td.editable { cursor: cell; }
+td.editable:hover { background: var(--surface-2); }
+.cell-editor { width: 100%; min-width: 90px; padding: 2px 6px; font-size: 13px; }
+.hint { margin: 0 0 8px; }
+
+/* вкладки внутри страницы */
+.subtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+.subtabs a { padding: 8px 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; }
+.subtabs a:hover { color: var(--text); }
+.subtabs a.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 button.danger { color: var(--error); }
 button.danger:hover { background: var(--error-bg); }
 button.icon-btn { padding: 3px 5px; line-height: 0; vertical-align: middle; }

@@ -193,12 +193,17 @@ class Journal:
         return self._add(Op(PENDING_ID, "order_placed", today, utcnow(), item, account_id, currency, quantity, price,
                             comment=comment))
 
-    def change_order(self, order_id: int, price: int, quantity: int, comment: str | None = None) -> int:
+    def change_order(self, order_id: int, price: int, quantity: int, comment: str | None = None,
+                     account_id: int | None = None, currency: Currency | None = None) -> int:
+        """Перевыставить ордер: цена, количество, комментарий, а также аккаунт и валюта (None — без изменений)."""
         order = self._open_order(order_id)
-        self._check_amounts(quantity, price)
+        account_id = order.account_id if account_id is None else account_id
+        currency = order.currency if currency is None else Currency(currency)
+        self._check_trade(order.market_hash_name, account_id, currency, quantity, price, today_msk())
         return self._add(Op(PENDING_ID, "order_changed", today_msk(), utcnow(), order.market_hash_name,
-                            order.account_id, order.currency, quantity, price, order_id=order_id,
-                            payload={"before": {"price": order.price, "quantity": order.quantity, "comment": order.comment}},
+                            account_id, currency, quantity, price, order_id=order_id,
+                            payload={"before": {"price": order.price, "quantity": order.quantity, "comment": order.comment,
+                                                "account_id": order.account_id, "currency": int(order.currency)}},
                             comment=order.comment if comment is None else comment))
 
     def fill_order(self, order_id: int, quantity: int | None = None, op_date: date | None = None,

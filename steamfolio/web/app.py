@@ -128,6 +128,8 @@ class ChangeIn(BaseModel):
     price: str
     quantity: int
     comment: str = ""
+    account_id: int | None = None
+    currency: str | None = None
 
 
 class EditIn(BaseModel):
@@ -407,7 +409,9 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
 
     @app.post("/api/orders/{order_id}/change")
     def change_order(order_id: int, body: ChangeIn, conn: Conn, user: User) -> dict[str, Any]:
-        op_id = journal(conn, user).change_order(order_id, money(body.price), body.quantity, body.comment.strip())
+        op_id = journal(conn, user).change_order(
+            order_id, money(body.price), body.quantity, body.comment.strip(), account_id=body.account_id,
+            currency=currency(body.currency) if body.currency else None)
         return {"op_id": op_id}
 
     @app.post("/api/orders/{order_id}/remove")

@@ -194,6 +194,16 @@ def test_order_fill_cannot_exceed_remaining(journal, acc):
         journal.fill_order(order, quantity=3)
 
 
+def test_order_change_account_and_currency(journal, acc, acc2):
+    # Перевыставление на другой аккаунт и в другой валюте: исполнение идёт уже туда.
+    order = journal.place_order(CASE, acc, RUB, 10, 5000)
+    journal.change_order(order, price=70, quantity=10, account_id=acc2, currency=USD)
+    o = journal.ledger().orders[order]
+    assert (o.account_id, o.currency, o.price) == (acc2, USD, 70)
+    journal.fill_order(order)
+    assert pos(journal, acc2, USD).quantity == 10 and pos(journal, acc).quantity == 0
+
+
 def test_order_change_and_remove(journal, acc):
     order = journal.place_order(CASE, acc, RUB, 10, 5000, comment="старт")
     change = journal.change_order(order, price=5500, quantity=8, comment="перебили")

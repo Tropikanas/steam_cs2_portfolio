@@ -356,6 +356,7 @@ def _replay_orders(ledger: Ledger, ops: list[Op]) -> set[int]:
             continue
         if op.kind == "order_changed":
             order.price, order.quantity, order.comment = op.price, op.quantity, op.comment
+            order.account_id, order.currency = op.account_id, op.currency
         elif op.kind == "order_removed":
             order.status = "removed"
         elif op.kind == "order_filled":

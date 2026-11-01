@@ -979,22 +979,76 @@ const SF = (() => {
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
       { id: "item", title: "Название", key: "item", cls: "name sticky-2", filter: true,
         html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a>` },
-      { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
-      { id: "price", title: "Цена за шт.", key: "price", cls: "num", numeric: true, filter: true, html: (r) => money(r.price, r.currency) },
-      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
+      { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0),
+        bind: (td, r) => bindOrderEdit(td, r, "quantity") },
+      { id: "price", title: "Цена за шт.", key: "price", cls: "num", numeric: true, filter: true, html: (r) => money(r.price, r.currency),
+        bind: (td, r) => bindOrderEdit(td, r, "price") },
+      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency,
+        bind: (td, r) => bindOrderEdit(td, r, "currency") },
       { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames, values: (r) => [r.account],
-        html: (r) => esc(r.account) },
+        html: (r) => esc(r.account), bind: (td, r) => bindOrderEdit(td, r, "account_id") },
       { id: "market", title: "Лучший ордер на площадке", key: "market_best", cls: "num", numeric: true, filter: true,
         html: (r) => `<span title="снят ${esc(dateTime(r.market_at))}">${money(r.market_best, r.currency)}</span>${r.outbid ? '<span class="badge">перебит</span>' : ""}` },
       { id: "total", title: "Сумма", key: "total", cls: "num", numeric: true, filter: true, html: (r) => money(r.total, r.currency) },
-      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
+      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment),
+        bind: (td, r) => bindOrderEdit(td, r, "comment") },
       { id: "actions", title: "", cls: "actions", sortable: false,
-        html: () => '<button class="small" data-a="all">Куплено всё</button><button class="small" data-a="part">Частично</button><button class="small" data-a="change">Изменить</button>'
+        html: () => '<button class="small" data-a="all">Куплено всё</button><button class="small" data-a="part">Частично</button>'
           + `<button class="small danger icon-btn" data-a="remove" title="Убрать ордер" aria-label="Убрать ордер">${TRASH_ICON}</button>`,
         bind: (td, r) => td.querySelectorAll("button").forEach((b) => b.onclick = () => ({
-          all: () => fillForm(r, false), part: () => fillForm(r, true), change: () => changeForm(r), remove: () => removeOrder(r),
+          all: () => fillForm(r, false), part: () => fillForm(r, true), remove: () => removeOrder(r),
         })[b.dataset.a]()) },
     ];
+
+    // Правка ордера двойным щелчком по ячейке — как в портфеле. Это перевыставление: «ордер изменён» в журнале.
+    function bindOrderEdit(td, r, field) {
+      td.classList.add("editable");
+      td.title = td.title || "Двойной щелчок — изменить";
+      td.ondblclick = (e) => { e.preventDefault(); editOrderCell(td, r, field); };
+    }
+
+    const orderValue = (r, field) => field === "price" ? String(r.price).replace(".", ",") : r[field] ?? "";
+
+    function editOrderCell(td, r, field) {
+      const control = document.createElement(field === "currency" || field === "account_id" ? "select" : "input");
+      if (field === "currency") control.innerHTML = currencyOptions().map((o) => `<option value="${esc(o.value)}">${esc(o.value)}</option>`).join("");
+      if (field === "account_id") {
+        control.innerHTML = meta.accounts.filter((a) => !a.hidden || a.id === r.account_id)
+          .map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
+      }
+      if (field === "quantity") { control.type = "number"; control.min = 1; control.step = 1; }
+      if (field === "price") control.inputMode = "decimal";
+      control.value = orderValue(r, field);
+      control.className = "cell-editor";
+      td.ondblclick = null;
+      td.replaceChildren(control);
+      control.focus();
+      if (control.select) control.select();
+      let done = false;
+      const finish = async (commit) => {
+        if (done) return;
+        done = true;
+        const value = control.value.trim();
+        const empty = value === "" && field !== "comment";  // комментарий можно стереть
+        if (!commit || empty || value === String(orderValue(r, field))) { table.render(); return; }
+        const body = { price: String(r.price), quantity: r.quantity, comment: r.comment || "" };
+        body[field] = field === "quantity" || field === "account_id" ? +value : value;
+        try {
+          await api("POST", `/api/orders/${r.order_id}/change`, body);
+          toast("Ордер перевыставлен — запись в журнале");
+          await reload();
+        } catch (e) {
+          toast(e.message + (e.violations && e.violations.length ? ": " + e.violations.join("; ") : ""), true);
+          table.render();
+        }
+      };
+      control.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") finish(true);
+        if (e.key === "Escape") finish(false);
+      });
+      control.addEventListener("blur", () => finish(true));
+      if (control.tagName === "SELECT") control.addEventListener("change", () => finish(true));
+    }
 
     async function reload() {
       const data = await api("GET", "/api/orders");
@@ -1061,24 +1115,6 @@ const SF = (() => {
             quantity: partial ? +v.quantity : null, date: v.date, price: v.price, fx_rate: v.fx_rate || null,
           });
           toast(`Покупка записана в портфель: ${r.item}`);
-          await reload();
-        },
-      });
-    }
-
-    function changeForm(r) {
-      openForm({
-        title: `Изменить ордер: ${r.item}`,
-        submit: "Перевыставить",
-        layout: [
-          [{ name: "price", label: `Новая цена, ${r.currency}`, inputmode: "decimal", value: String(r.price).replace(".", ","),
-            attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' },
-            { name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: r.quantity }],
-          { name: "comment", label: "Комментарий", type: "textarea", required: false, value: r.comment },
-        ],
-        onSubmit: async (v) => {
-          await api("POST", `/api/orders/${r.order_id}/change`, { price: v.price, quantity: +v.quantity, comment: v.comment });
-          toast("Ордер перевыставлен");
           await reload();
         },
       });

@@ -139,6 +139,32 @@ def test_cache_cbr_rates_fills_history_range(conn):
     assert len(calls) == 3
 
 
+def test_removal_does_not_erase_earlier_purchases(journal, acc):
+    """Удалены штуки, купленные позже, — более ранняя покупка той же строки остаётся на графике."""
+    from steamfolio.ledger import daily_holdings
+
+    journal.buy(CASE, acc, RUB, 1200, 8000, D("2026-09-20"))
+    journal.remove_position(CASE, acc, RUB)  # удалены эти 1200
+    journal.buy(CASE, acc, RUB, 500, 8000, D("2026-09-01"))  # покупка, внесённая потом задним числом
+    by_day = {day: {k.market_hash_name: v[0] for k, v in state.items()} for day, state in daily_holdings(journal.ops())}
+    assert by_day[D("2026-09-01")] == {CASE: 500}
+    assert by_day[D("2026-09-20")] == {CASE: 500}
+
+
+def test_removal_takes_latest_purchases_first(journal, acc):
+    from steamfolio.ledger import daily_holdings
+
+    journal.buy(CASE, acc, RUB, 500, 8000, D("2026-09-01"))  # остаётся
+    journal.buy(CASE, acc, RUB, 1200, 8000, D("2026-09-20"))  # будет удалена
+    journal.sell(CASE, acc, RUB, 1700, 8000, D("2026-09-25"))  # всё продали...
+    journal.buy(CASE, acc, RUB, 300, 8000, D("2026-09-26"))
+    journal.remove_position(CASE, acc, RUB)  # ...а удалены только 300 после продажи
+    by_day = {day: {k.market_hash_name: v[0] for k, v in state.items()} for day, state in daily_holdings(journal.ops())}
+    assert by_day[D("2026-09-01")] == {CASE: 500}
+    assert by_day[D("2026-09-20")] == {CASE: 1700}
+    assert by_day[D("2026-09-26")] == {}
+
+
 def test_series_estimate_before_launch_uses_history(conn, journal, acc):
     journal.buy(CASE, acc, RUB, 10, 800, D("2021-11-15"))
     with conn:

@@ -239,36 +239,54 @@ Holding = tuple[int, Decimal, Decimal]  # (количество, себесто�
 def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
     """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
 
-    Удалённая позиция считается ошибочно внесённой: её штуки убираются и из прошлого,
-    будто их никогда не было (остаток строки до даты удаления уменьшается на удалённое количество).
+    Удалённая позиция считается ошибочно внесённой: её штуки убираются и из прошлого, будто их никогда не было.
+    Удалённые штуки — последние пришедшие в строку (покупки, исполнения ордеров, переносы на этот аккаунт):
+    идя назад от удаления, их убираем из остатков, пока не дойдём до прихода, которым они появились.
+    Штуки, купленные раньше и не удалённые, на графике остаются.
     """
     ledger, timeline = _prepare(ops)
-    result: list[tuple[date, dict[RowKey, Holding]]] = []
-    removals: list[tuple[date, RowKey, int]] = []
+    steps: list[tuple[Op, dict[RowKey, Holding]]] = []  # остаток после каждой операции
+    removals: list[tuple[int, RowKey, int]] = []
     for op in timeline:
         problems = len(ledger.violations)
         _apply(ledger, op)
         if op.kind == "position_removed" and len(ledger.violations) == problems:
-            removals.append((op.op_date, RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity))
-        state = {k: (p.quantity, p.cost_usd, p.cost) for k, p in ledger.positions.items() if p.quantity > 0}
+            removals.append((len(steps), RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity))
+        steps.append((op, {k: (p.quantity, p.cost_usd, p.cost) for k, p in ledger.positions.items() if p.quantity > 0}))
+    for index, key, removed in removals:
+        left_to_remove = removed
+        for op, state in reversed(steps[:index]):
+            if left_to_remove <= 0:
+                break
+            if key in state:
+                qty, cost_usd, cost = state[key]
+                left = qty - left_to_remove
+                if left > 0:
+                    state[key] = (left, cost_usd * left / qty, cost * left / qty)  # по средней цене
+                else:
+                    del state[key]
+            # До этого прихода его штук не было — их уже не вычитаем.
+            if _brings_into(op, key):
+                left_to_remove -= min(left_to_remove, op.quantity)
+    result: list[tuple[date, dict[RowKey, Holding]]] = []
+    for op, state in steps:
         if result and result[-1][0] == op.op_date:
             result[-1] = (op.op_date, state)
         else:
             result.append((op.op_date, state))
-    for removed_on, key, removed in removals:
-        for day, state in result:
-            if day >= removed_on or key not in state:
-                continue
-            qty, cost_usd, cost = state[key]
-            left = qty - removed
-            if left > 0:
-                state[key] = (left, cost_usd * left / qty, cost * left / qty)  # по средней цене
-            else:
-                del state[key]
     # Если удалено всё, что было куплено в начале, график начинается с первой оставшейся покупки.
     while result and not result[0][1]:
         result.pop(0)
     return result
+
+
+def _brings_into(op: Op, key: RowKey) -> bool:
+    """Операция добавляет штуки в строку key: покупка, исполнение ордера или перенос на этот аккаунт."""
+    if op.market_hash_name != key.market_hash_name or op.currency != key.currency:
+        return False
+    if op.kind == "transfer":
+        return op.to_account_id == key.account_id
+    return op.kind in ("buy", "order_filled") and op.account_id == key.account_id
 
 
 def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:

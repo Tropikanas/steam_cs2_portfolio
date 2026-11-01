@@ -53,6 +53,17 @@ def test_series_adds_current_point_after_last_run(conn, journal, acc):
     assert [y for _, y in s["value"]] == [2.4, 2.4]
 
 
+def test_series_starts_at_first_remaining_purchase(conn, journal, acc):
+    # Ошибочная покупка 27.10 удалена — сборы цен до настоящей покупки 01.11 на график не попадают.
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-10-27"))
+    run_with_prices(conn, "2026-10-28T06:00:00+00:00", {(CASE, USD): 12})
+    journal.remove_position(CASE, acc, RUB)
+    journal.buy(AK, acc, USD, 1, 300, D("2026-11-01"))
+    run_with_prices(conn, "2026-11-01T06:00:00+00:00", {(AK, USD): 400})
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 11, 1, 6, tzinfo=UTC))
+    assert points(s["invested"]) == [("2026-11-01T06:00+00:00", 3.0)] and [y for _, y in s["value"]] == [4.0]
+
+
 def test_removed_position_disappears_from_chart_history(conn, journal, acc, acc2):
     journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-01"))  # $1.00 — потом удалена целиком
     journal.buy(AK, acc, USD, 1, 300, D("2026-09-01"))
@@ -147,8 +158,7 @@ def test_removal_does_not_erase_earlier_purchases(journal, acc):
     journal.remove_position(CASE, acc, RUB)  # удалены эти 1200
     journal.buy(CASE, acc, RUB, 500, 8000, D("2026-09-01"))  # покупка, внесённая потом задним числом
     by_day = {day: {k.market_hash_name: v[0] for k, v in state.items()} for day, state in daily_holdings(journal.ops())}
-    assert by_day[D("2026-09-01")] == {CASE: 500}
-    assert by_day[D("2026-09-20")] == {CASE: 500}
+    assert by_day == {D("2026-09-01"): {CASE: 500}}  # дня ошибочной покупки на графике нет вовсе
 
 
 def test_removal_follows_transfer_to_source_account(journal, acc, acc2):
@@ -172,7 +182,21 @@ def test_removal_takes_latest_purchases_first(journal, acc):
     by_day = {day: {k.market_hash_name: v[0] for k, v in state.items()} for day, state in daily_holdings(journal.ops())}
     assert by_day[D("2026-09-01")] == {CASE: 500}
     assert by_day[D("2026-09-20")] == {CASE: 1700}
-    assert by_day[D("2026-09-26")] == {}
+    assert D("2026-09-26") not in by_day  # удалённая покупка — как не было
+
+
+def test_removal_does_not_take_already_removed_purchase(journal, acc):
+    # 1200 внесены и удалены; потом задним числом внесены 500 и тоже удалены — на графике не остаётся ничего.
+    from steamfolio.ledger import daily_holdings, without_removed
+
+    journal.buy(CASE, acc, RUB, 1200, 8000, D("2026-09-20"))
+    journal.remove_position(CASE, acc, RUB)
+    journal.buy(CASE, acc, RUB, 500, 8000, D("2026-09-01"))
+    journal.remove_position(CASE, acc, RUB)
+    journal.buy(AK, acc, USD, 3, 1000, D("2026-09-25"))
+    assert [op.kind for op in without_removed(journal.ops())] == ["buy"]
+    assert [(day, {k.market_hash_name: v[0] for k, v in state.items()}) for day, state in daily_holdings(journal.ops())] \
+        == [(D("2026-09-25"), {AK: 3})]
 
 
 def test_series_estimate_before_launch_uses_history(conn, journal, acc):

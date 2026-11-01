@@ -236,48 +236,69 @@ def replay(ops: list[Op]) -> Ledger:
 Holding = tuple[int, Decimal, Decimal]  # (количество, себестоимость в USD, себестоимость в валюте строки)
 
 
-def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
-    """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
+def removal_matches(ops: list[Op]) -> tuple[list[Op], dict[int, int], set[int]]:
+    """Какие поступления сняты удалением позиций: (действующие операции, {id поступления: снято штук}, id удалений).
 
-    Удалённая позиция считается ошибочно внесённой: её штуки убираются и из прошлого, будто их никогда не было.
-    Удалённые штуки — последние пришедшие в строку (покупки, исполнения ордеров, переносы на этот аккаунт):
-    идя назад от удаления, их убираем из остатков, пока не дойдём до прихода, которым они появились.
-    Штуки, купленные раньше и не удалённые, на графике остаются.
+    Удалённая позиция — ошибочно внесённые штуки. Это последние пришедшие в строку штуки
+    (покупки, исполнения ордеров, переносы на этот аккаунт), ещё не снятые прежними удалениями:
+    одну покупку нельзя «удалить» дважды. Пришедшие переносом снимаются и с исходного аккаунта.
     """
     ledger, timeline = _prepare(ops)
-    steps: list[tuple[Op, dict[RowKey, Holding]]] = []  # остаток после каждой операции
-    removals: list[tuple[int, RowKey, int]] = []
-    for op in timeline:
+    valid: list[int] = []
+    for index, op in enumerate(timeline):
         problems = len(ledger.violations)
         _apply(ledger, op)
         if op.kind == "position_removed" and len(ledger.violations) == problems:
-            removals.append((len(steps), RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity))
-        steps.append((op, {k: (p.quantity, p.cost_usd, p.cost) for k, p in ledger.positions.items() if p.quantity > 0}))
-    def erase(index: int, key: RowKey, count: int) -> None:
-        """Убрать count штук строки key из остатков до операции index (назад, до их прихода)."""
+            valid.append(index)
+    taken: dict[int, int] = {}
+
+    def take(index: int, key: RowKey, count: int) -> None:
         for i in range(index - 1, -1, -1):
             if count <= 0:
                 return
-            op, state = steps[i]
-            if key in state:
-                qty, cost_usd, cost = state[key]
-                left = qty - count
-                if left > 0:
-                    state[key] = (left, cost_usd * left / qty, cost * left / qty)  # по средней цене
-                else:
-                    del state[key]
-            if _brings_into(op, key):
-                # До этого прихода его штук здесь не было. Если они пришли переносом —
-                # до переноса они были на исходном аккаунте: убираем их и там.
-                came = min(count, op.quantity)
-                if op.kind == "transfer":
-                    erase(i, RowKey(op.market_hash_name, op.account_id, op.currency), came)
-                count -= came
+            op = timeline[i]
+            if not _brings_into(op, key):
+                continue
+            got = min(count, op.quantity - taken.get(op.id, 0))
+            if got <= 0:
+                continue
+            taken[op.id] = taken.get(op.id, 0) + got
+            if op.kind == "transfer":
+                take(i, RowKey(op.market_hash_name, op.account_id, op.currency), got)
+            count -= got
 
-    for index, key, removed in removals:
-        erase(index, key, removed)
+    for index in valid:
+        op = timeline[index]
+        take(index, RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity)
+    return timeline, taken, {timeline[index].id for index in valid}
+
+
+def without_removed(ops: list[Op]) -> list[Op]:
+    """Журнал без ошибочно внесённого: снятые удалением штуки вычтены из своих поступлений, удаления убраны.
+    Остаются ровно те покупки, из которых сложились текущий портфель и закрытые позиции."""
+    _, taken, removals = removal_matches(ops)
+    result = []
+    for op in effective_ops(ops):  # с выставлениями ордеров: без них исполнения не засчитаются
+        if op.id in removals:
+            continue
+        if op.id in taken:
+            if op.quantity <= taken[op.id]:
+                continue
+            op = replace(op, quantity=op.quantity - taken[op.id])
+        result.append(op)
+    return result
+
+
+def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
+    """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
+
+    Строится по журналу без ошибочно внесённого (without_removed): удалённых штук нет и в прошлом.
+    """
+    ledger, timeline = _prepare(without_removed(ops))
     result: list[tuple[date, dict[RowKey, Holding]]] = []
-    for op, state in steps:
+    for op in timeline:
+        _apply(ledger, op)
+        state = {k: (p.quantity, p.cost_usd, p.cost) for k, p in ledger.positions.items() if p.quantity > 0}
         if result and result[-1][0] == op.op_date:
             result[-1] = (op.op_date, state)
         else:

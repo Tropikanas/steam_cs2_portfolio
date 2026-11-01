@@ -4,6 +4,13 @@ const SF = (() => {
   // ---------- форматирование ----------
 
   const SIGN = { RUB: "₽", USD: "$", CNY: "¥", UAH: "₴" };
+  // Поля дат на всём сайте: календарь открывается по щелчку в любом месте поля, не только по значку.
+  document.addEventListener("click", (e) => {
+    const input = e.target.closest?.('input[type="date"]');
+    if (input && !input.disabled && !input.readOnly) {
+      try { input.showPicker(); } catch { /* браузер без showPicker — остаётся значок */ }
+    }
+  });
   const TRASH_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
   const FX_SOURCE = { steam: "курс Steam", cbr: "курс ЦБ на дату", usd: "", manual: "курс задан вручную" };
 
@@ -989,7 +996,8 @@ const SF = (() => {
       { id: "total", title: "Сумма", key: "total", cls: "num", numeric: true, filter: true, html: (r) => money(r.total, r.currency) },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
       { id: "actions", title: "", cls: "actions", sortable: false,
-        html: () => '<button class="small" data-a="all">Куплено всё</button><button class="small" data-a="part">Частично</button><button class="small" data-a="change">Изменить</button><button class="small" data-a="remove">Убрать</button>',
+        html: () => '<button class="small" data-a="all">Куплено всё</button><button class="small" data-a="part">Частично</button><button class="small" data-a="change">Изменить</button>'
+          + `<button class="small danger icon-btn" data-a="remove" title="Убрать ордер" aria-label="Убрать ордер">${TRASH_ICON}</button>`,
         bind: (td, r) => td.querySelectorAll("button").forEach((b) => b.onclick = () => ({
           all: () => fillForm(r, false), part: () => fillForm(r, true), change: () => changeForm(r), remove: () => removeOrder(r),
         })[b.dataset.a]()) },

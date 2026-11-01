@@ -165,6 +165,8 @@ def series(
         invested_line.append([_ms(moment), _usd(invested(state))])
         day += timedelta(days=1)
     for ts in runs:
+        if msk_date(ts) < days[0]:
+            continue  # график начинается с первой покупки, а не с первого сбора цен
         state = held(msk_date(ts))
         moment = datetime.fromisoformat(ts)
         value.append([_ms(moment), _usd(value_at(state, ts))])

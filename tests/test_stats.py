@@ -64,6 +64,19 @@ def test_series_starts_at_first_remaining_purchase(conn, journal, acc):
     assert points(s["invested"]) == [("2026-11-01T06:00+00:00", 3.0)] and [y for _, y in s["value"]] == [4.0]
 
 
+def test_series_starts_at_first_purchase_even_if_sold(conn, journal, acc):
+    # Первая покупка уже продана (закрытая позиция) — график всё равно начинается с неё.
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-10-27"))
+    run_with_prices(conn, "2026-10-28T06:00:00+00:00", {(CASE, USD): 12})
+    journal.sell(CASE, acc, RUB, 10, 1600, D("2026-10-29"))
+    journal.buy(AK, acc, USD, 1, 300, D("2026-11-01"))
+    run_with_prices(conn, "2026-11-01T06:00:00+00:00", {(AK, USD): 400})
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 11, 1, 6, tzinfo=UTC))
+    # 27.10 — конец дня покупки (оценка до первого сбора цен), затем сборы 28.10 и 01.11
+    assert points(s["invested"]) == [
+        ("2026-10-27T20:59+00:00", 1.0), ("2026-10-28T06:00+00:00", 1.0), ("2026-11-01T06:00+00:00", 3.0)]
+
+
 def test_removed_position_disappears_from_chart_history(conn, journal, acc, acc2):
     journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-01"))  # $1.00 — потом удалена целиком
     journal.buy(AK, acc, USD, 1, 300, D("2026-09-01"))

@@ -13,7 +13,7 @@ from typing import Any
 
 from steamfolio import catalog
 from steamfolio.collector import STALE_AFTER, latest_rates
-from steamfolio.currencies import Currency
+from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.journal import KIND_NAMES, Preview
 from steamfolio.ledger import DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, effective_ops
 from steamfolio.market import listing_url
@@ -189,6 +189,37 @@ def portfolio(
         },
         "last_update": last_update(conn),
     }
+
+
+def steam_rates(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Курсы Steam последнего сбора и лоты, из которых они посчитаны, — чтобы их можно было проверить на площадке."""
+    run = conn.execute(
+        "SELECT run_id, MAX(taken_at) FROM fx_snapshots GROUP BY run_id ORDER BY MAX(taken_at) DESC LIMIT 1"
+    ).fetchone()
+    if run is None:
+        return {"taken_at": None, "rates": [], "items": []}
+    run_id, taken_at = run
+    rates = []
+    for r in conn.execute("SELECT * FROM fx_snapshots WHERE run_id = ? ORDER BY currency", (run_id,)):
+        currency = Currency(r["currency"])
+        # Курс сутки назад — для сравнения (ближайший снимок не позже).
+        day_ago = conn.execute(
+            """SELECT rate FROM fx_snapshots WHERE currency = ? AND taken_at <= ? ORDER BY taken_at DESC LIMIT 1""",
+            (r["currency"], (datetime.fromisoformat(r["taken_at"]) - timedelta(days=1) + SNAPSHOT_TOLERANCE).isoformat(timespec="seconds")),
+        ).fetchone()
+        rates.append({
+            "code": currency.name, "symbol": SYMBOLS[currency], "name": NAMES[currency],
+            "rate": round(r["rate"], 4), "usd_per_unit": round(1 / r["rate"], 6) if r["rate"] else None,
+            "samples": r["samples"], "spread_pct": round(r["spread_pct"], 2),
+            "pct_1d": round((r["rate"] / day_ago[0] - 1) * 100, 2) if day_ago and day_ago[0] else None,
+        })
+    rates.sort(key=lambda x: USER_CURRENCIES.index(Currency[x["code"]]))
+    items: dict[str, dict[str, Any]] = {}
+    for s in conn.execute("SELECT * FROM fx_samples WHERE run_id = ? ORDER BY rowid", (run_id,)):
+        item = items.setdefault(s["market_hash_name"], {"item": s["market_hash_name"], "url": listing_url(s["market_hash_name"]),
+                                                          "prices": {}})
+        item["prices"][Currency(s["currency"]).name] = _units(s["lowest_sell"])
+    return {"taken_at": taken_at, "rates": rates, "items": list(items.values())}
 
 
 def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> dict[str, Any]:

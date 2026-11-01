@@ -473,11 +473,13 @@ const SF = (() => {
     const orders = ordersPage({ summary: "o-summary", table: "o-table", counter: "o-rows-count",
       btnOrder: "btn-order", btnAccounts: "o-btn-accounts" });
     function showPane() {
-      const pane = ["closed", "orders"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "positions";
+      const pane = ["closed", "orders", "rates"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "positions";
       document.querySelectorAll("#subtabs a").forEach((a) => a.classList.toggle("active", a.dataset.pane === pane));
-      document.getElementById("pane-positions").classList.toggle("hidden", pane === "orders");
+      document.getElementById("pane-positions").classList.toggle("hidden", pane === "orders" || pane === "rates");
       document.getElementById("pane-orders").classList.toggle("hidden", pane !== "orders");
+      document.getElementById("pane-rates").classList.toggle("hidden", pane !== "rates");
       if (pane === "orders") { orders.reload(); return; }
+      if (pane === "rates") { ratesPane().catch((e) => toast(e.message, true)); return; }
       closed.checked = pane === "closed";
       document.getElementById("btn-buy").classList.toggle("hidden", closed.checked);
       document.getElementById("collapse-toggle").classList.toggle("hidden", closed.checked);
@@ -915,6 +917,43 @@ const SF = (() => {
     document.getElementById("btn-buy").onclick = () => requireAccounts(buyForm);
     document.getElementById("btn-accounts").onclick = () => accountsDialog(reload);
     loadMeta().then(showPane).catch((e) => toast(e.message, true));
+  }
+
+  // ---------- вкладка «Курс валют» страницы «Портфолио» ----------
+
+  async function ratesPane() {
+    const data = await api("GET", "/api/rates");
+    const el = (id) => document.getElementById(id);
+    el("rates-time").textContent = data.taken_at ? "Рассчитан: " + dateTime(data.taken_at) : "";
+    el("rates-note").textContent = `Сколько единиц валюты Steam берёт за $1. Считается при каждом сборе цен (раз в 6 часов):
+      цена самого дешёвого лота дорогого предмета (дороже $${num(data.min_item_usd, 0)}) в валюте делится на его цену в USD,
+      берётся медиана по нескольким предметам — на дешёвых предметах округление цен искажает курс.
+      По этому курсу считаются покупки и продажи с даты начала истории (для более ранних дат — курс ЦБ РФ).`;
+    if (!data.rates.length) {
+      el("rates-table").innerHTML = '<div class="empty-state">Курсов пока нет — они появятся после первого сбора цен</div>';
+      el("rates-items").innerHTML = "";
+      return;
+    }
+    const rate = (v) => Number(v).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    // Курс за сутки меняется на сотые доли процента — показываем два знака и без «−0».
+    const change = (v) => v == null ? '<span class="muted">—</span>' : Math.abs(v) < 0.005 ? "0,00%"
+      : `<span class="${v > 0 ? "up" : "down"}">${v > 0 ? "+" : "−"}${num(Math.abs(v), 2)}%</span>`;
+    el("rates-table").innerHTML = `<table><thead><tr><th>Валюта</th><th class="num">За $1</th><th class="num">$ за 1 единицу</th>
+      <th class="num">За сутки</th><th class="num">Предметов</th><th class="num" title="(макс − мин) / медиана по предметам">Разброс</th></tr></thead><tbody>
+      ${data.rates.map((r) => `<tr><td><b>${esc(r.code)}</b>, ${esc(r.symbol)} <span class="muted">— ${esc(r.name)}</span></td>
+        <td class="num"><b>${rate(r.rate)} ${esc(r.symbol)}</b></td>
+        <td class="num">$${Number(r.usd_per_unit).toLocaleString("ru-RU", { maximumFractionDigits: 6 })}</td>
+        <td class="num">${change(r.pct_1d)}</td><td class="num">${r.samples}</td><td class="num">${num(r.spread_pct, 2)}%</td></tr>`).join("")}
+      </tbody></table>`;
+    const codes = ["USD", ...data.rates.map((r) => r.code)];
+    el("rates-items").innerHTML = `<table><thead><tr><th>Предмет</th>${codes.map((c) => `<th class="num">${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${data.items.map((i) => `<tr><td class="name"><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.item)}</a></td>
+        ${codes.map((c) => {
+          const p = i.prices[c], usd = i.prices.USD;
+          const hint = c !== "USD" && p != null && usd ? ` title="${esc(rate(p / usd))} ${esc(c)} за $1"` : "";
+          return `<td class="num"${hint}>${p == null ? '<span class="muted">—</span>' : money(p, c)}</td>`;
+        }).join("")}</tr>`).join("")}
+      </tbody></table>`;
   }
 
   // ---------- вкладка «Ордера» страницы «Портфолио» ----------

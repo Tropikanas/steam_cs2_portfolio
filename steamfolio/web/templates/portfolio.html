@@ -5,6 +5,7 @@
   <a href="#positions" data-pane="positions" role="tab">Текущий портфель</a>
   <a href="#closed" data-pane="closed" role="tab">Закрытые позиции</a>
   <a href="#orders" data-pane="orders" role="tab">Ордера</a>
+  <a href="#rates" data-pane="rates" role="tab">Курс валют</a>
 </nav>
 
 <div id="pane-positions">
@@ -30,6 +31,20 @@
     <span class="muted small" id="o-rows-count"></span>
   </div>
   <div class="table-wrap" id="o-table"></div>
+</div>
+
+<div id="pane-rates" class="hidden">
+  <section class="card panel">
+    <div class="panel-head"><h2>Курс Steam</h2><span class="muted small" id="rates-time"></span></div>
+    <p class="muted small" id="rates-note"></p>
+    <div class="table-wrap" id="rates-table"></div>
+  </section>
+  <section class="card panel">
+    <div class="panel-head"><h2>Из каких лотов посчитан</h2></div>
+    <p class="muted small">Цена самого дешёвого лота на продаже в каждой валюте в момент сбора. Откройте предмет в Steam,
+      переключите валюту аккаунта или сравните с ценой в другой валюте — курс = цена в валюте ÷ цена в USD.</p>
+    <div class="table-wrap" id="rates-items"></div>
+  </section>
 </div>
 {% endblock %}
 {% block scripts %}<script>SF.portfolioPage();</script>{% endblock %}

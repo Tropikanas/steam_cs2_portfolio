@@ -315,6 +315,10 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     def orders_api(conn: Conn, user: User) -> dict[str, Any]:
         return views.orders(conn, journal(conn, user).ledger(), PORTFOLIO_ID)
 
+    @app.get("/api/rates")
+    def rates_api(conn: Conn, user: User) -> dict[str, Any]:
+        return {**views.steam_rates(conn), "min_item_usd": settings.min_rate_item_usd}
+
     @app.get("/api/items")
     def items_api(conn: Conn, user: User, q: str = "") -> list[dict[str, Any]]:
         return catalog.search(conn, q[:100])

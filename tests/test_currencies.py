@@ -41,6 +41,24 @@ def test_parse_cbr_takes_every_known_currency():
     assert Currency.UAH not in rates
 
 
+def test_steam_rates_view(conn):
+    from steamfolio import views
+
+    assert views.steam_rates(conn) == {"taken_at": None, "rates": [], "items": []}
+    knife = "★ Karambit | Doppler (Factory New)"
+    for run_id, at, rub in ((1, "2026-10-30T06:00:00+00:00", 80.0), (2, "2026-10-31T06:00:00+00:00", 82.0)):
+        with conn:
+            conn.execute("INSERT INTO collector_runs (id, started_at, finished_at, status) VALUES (?, ?, ?, 'ok')", (run_id, at, at))
+            conn.execute("INSERT INTO fx_snapshots VALUES (?, ?, ?, ?, 5, 0.5)", (run_id, at, int(Currency.RUB), rub))
+            conn.execute("INSERT INTO fx_snapshots VALUES (?, ?, ?, ?, 5, 0.5)", (run_id, at, int(Currency.KZT), 500.0))
+            conn.executemany("INSERT INTO fx_samples VALUES (?, ?, ?, ?)",
+                             [(run_id, knife, int(Currency.USD), 150000), (run_id, knife, int(Currency.RUB), int(150000 * rub))])
+    data = views.steam_rates(conn)
+    assert data["taken_at"] == "2026-10-31T06:00:00+00:00"
+    assert [(r["code"], r["rate"], r["pct_1d"]) for r in data["rates"]] == [("RUB", 82.0, 2.5), ("KZT", 500.0, 0.0)]
+    assert data["items"][0]["prices"] == {"USD": 1500.0, "RUB": 123000.0}
+
+
 def test_chart_currencies_sorted_by_invested(journal, acc):
     journal.buy(CASE, acc, Currency.RUB, 1, 8000, D("2026-10-01"))  # $1
     journal.buy(CASE, acc, Currency.USD, 1, 300, D("2026-10-01"))  # $3

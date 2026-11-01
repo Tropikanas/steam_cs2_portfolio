@@ -1,8 +1,9 @@
-"""Оценка стоимости портфеля до начала собственных снимков: история продаж Steam в USD.
+"""Оценка стоимости портфеля там, где нет собственных снимков цен: история продаж Steam в USD.
 
-Для каждого предмета, купленного раньше первого планового сбора, один раз загружается
-история медианных цен продаж. Цены пересчитываются в центы USD по курсу ЦБ на каждый день
-(Steam отдаёт их в валюте страны сервера) и сохраняются только за дни до начала снимков.
+Для каждого предмета, купленного раньше, чем у него появился первый снимок цены (до начала сборов
+или внесённого задним числом), один раз загружается история медианных цен продаж. Цены пересчитываются
+в центы USD по курсу ЦБ на каждый день (Steam отдаёт их в валюте страны сервера) и сохраняются
+за все прошедшие дни: и до начала сборов (пунктир), и для точек сборов, когда предмет ещё не снимался.
 """
 
 from __future__ import annotations
@@ -37,22 +38,36 @@ def launch_date(conn: sqlite3.Connection) -> date:
 
 
 def items_needing_history(conn: sqlite3.Connection, ops: list[Op], launch: date) -> list[str]:
+    """Предметы, купленные раньше своего первого снимка цены (или раньше начала сборов)."""
+    first_snapshot = {
+        name: msk_date(taken_at) for name, taken_at in
+        conn.execute("SELECT market_hash_name, MIN(taken_at) FROM price_snapshots GROUP BY market_hash_name")
+    }
     early = sorted({
         op.market_hash_name for op in effective_ops(ops)
-        if op.kind in ("buy", "order_filled") and op.op_date < launch
+        if op.kind in ("buy", "order_filled")
+        and op.op_date < max(launch, first_snapshot.get(op.market_hash_name, launch))
     })
+    # Загруженная история засчитывается, если доходит до дня перед первым снимком цены (или до вчера):
+    # раньше она хранилась только до начала сборов, и для покупок задним числом её не хватало.
+    last_day = dict(conn.execute("SELECT market_hash_name, MAX(day) FROM price_history GROUP BY market_hash_name"))
     done = {r[0] for r in conn.execute("SELECT market_hash_name FROM price_history_fetched WHERE error IS NULL")}
-    return [name for name in early if name not in done]
+
+    def covered(name: str) -> bool:
+        need = min(first_snapshot.get(name, launch), today_msk()) - timedelta(days=1)
+        return name in done and (name not in last_day or date.fromisoformat(last_day[name]) >= need - timedelta(days=2))
+
+    return [name for name in early if not covered(name)]
 
 
 def daily_usd(
-    currency: Currency, points: list[tuple[int, float, int]], launch: date, rub_rates: RubRates,
+    currency: Currency, points: list[tuple[int, float, int]], until: date, rub_rates: RubRates,
 ) -> dict[date, int]:
-    """Дневная цена в центах USD: средняя по продажам за московские сутки, только до launch."""
+    """Дневная цена в центах USD: средняя по продажам за московские сутки, только до until (без него)."""
     by_day: dict[date, list[tuple[float, int]]] = defaultdict(list)
     for ts, price, volume in points:
         day = datetime.fromtimestamp(ts, UTC).astimezone(MSK).date()
-        if day < launch:
+        if day < until:
             by_day[day].append((price, volume))
     if not by_day:
         return {}
@@ -97,13 +112,14 @@ def backfill(
     conn: sqlite3.Connection, http: SteamHttp, ops: list[Op], rub_rates: RubRates = cbr_rub_per_unit,
     limit: int = 30,
 ) -> int:
-    """Загружает историю для предметов, купленных до начала снимков. Не больше limit предметов за раз."""
+    """Загружает историю для предметов, купленных раньше своих снимков цены. Не больше limit предметов за раз."""
     launch = launch_date(conn)
     loaded = 0
     for name in items_needing_history(conn, ops, launch)[:limit]:
         try:
             currency, points = fetch_price_history(http, name)
-            prices = daily_usd(currency, points, launch, rub_rates)
+            # Все прошедшие дни: история нужна и для точек сборов, когда предмет ещё не снимался.
+            prices = daily_usd(currency, points, today_msk(), rub_rates)
             error = None
         except (MarketError, OSError, ValueError) as e:
             log.warning("История цен %r не загружена: %s", name, e)

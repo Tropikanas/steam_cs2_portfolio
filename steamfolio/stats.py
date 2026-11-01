@@ -135,10 +135,23 @@ def series(
         rate = Decimal(1) if key.currency == Currency.USD else rates[int(key.currency)].at(ts)
         return Decimal(usd) * rate if usd is not None and rate else None
 
+    def history_price(key: RowKey, ts: str) -> Decimal | None:
+        """Медиана продаж Steam за день точки — для предмета, который на этот момент ещё не снимался."""
+        usd = history[key.market_hash_name].at(msk_date(ts).isoformat())
+        if usd is None:
+            return None
+        if currency is None or currency == Currency.USD:
+            return Decimal(usd)
+        rate = rates[int(currency)].at(ts) or (cbr.at(msk_date(ts).isoformat()) if cbr else None)
+        return Decimal(usd) * rate if rate else None
+
     def value_at(state: dict[RowKey, Holding], ts: str) -> Decimal:
         total = Decimal(0)
         for key, holding in state.items():
             price = price_usd(key, ts) if currency is None else price_local(key, ts)
+            if price is None:
+                price = history_price(key, ts)
+            # Ни снимка, ни истории продаж — по цене покупки, чтобы предмет не выпал из оценки.
             total += price * holding[0] if price is not None else cost_of(holding)
         return total
 

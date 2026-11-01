@@ -309,6 +309,35 @@ def test_items_needing_history(conn, journal, acc):
     assert items_needing_history(conn, journal.ops(), D("2026-09-27")) == []
 
 
+def test_history_needed_for_purchase_before_first_snapshot(conn, journal, acc):
+    # Сборы идут с 27.09, а AK внесён задним числом за 01.10 и впервые снят только 05.10.
+    from steamfolio.history import items_needing_history
+
+    journal.buy(AK, acc, RUB, 1, 100, D("2026-10-01"))
+    run_with_prices(conn, "2026-10-05T06:00:00+00:00", {(AK, USD): 400})
+    assert items_needing_history(conn, journal.ops(), D("2026-09-27")) == [AK]
+    # уже загружена, но только до начала сборов (старое правило) — до снимка 05.10 не хватает, загрузить заново
+    with conn:
+        conn.execute("INSERT INTO price_history_fetched VALUES (?, '', 1, NULL)", (AK,))
+        conn.execute("INSERT INTO price_history (market_hash_name, day, price_usd, volume) VALUES (?, '2026-09-26', 350, NULL)", (AK,))
+    assert items_needing_history(conn, journal.ops(), D("2026-09-27")) == [AK]
+    with conn:
+        conn.execute("INSERT INTO price_history (market_hash_name, day, price_usd, volume) VALUES (?, '2026-10-04', 360, NULL)", (AK,))
+    assert items_needing_history(conn, journal.ops(), D("2026-09-27")) == []
+
+
+def test_point_without_snapshot_valued_by_sales_history(conn, journal, acc):
+    journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-27"))  # $1.00
+    run_with_prices(conn, "2026-09-28T06:00:00+00:00", {(CASE, USD): 12})
+    journal.buy(AK, acc, USD, 2, 300, D("2026-09-28"))  # внесена позже, в сбор 28.09 AK не снимался
+    run_with_prices(conn, "2026-09-29T06:00:00+00:00", {(CASE, USD): 12, (AK, USD): 400})
+    with conn:
+        conn.execute("INSERT INTO price_history (market_hash_name, day, price_usd, volume) VALUES (?, '2026-09-28', 350, NULL)", (AK,))
+    s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 29, 6, tzinfo=UTC))
+    # 28.09: кейс 10×12¢ + AK 2×$3.50 по истории продаж (а не по цене покупки $3.00); 29.09 — по снимку $4.00
+    assert [y for _, y in s["value"]] == [8.2, 9.2]
+
+
 def test_parse_cbr_dynamic():
     xml = """<?xml version="1.0" encoding="windows-1251"?><ValCurs ID="R01239">
       <Record Date="13.11.2021" Id="R01239"><Nominal>1</Nominal><Value>82,3876</Value></Record>

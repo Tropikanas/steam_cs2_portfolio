@@ -4,13 +4,183 @@ const SF = (() => {
   // ---------- форматирование ----------
 
   const SIGN = { RUB: "₽", USD: "$", CNY: "¥", UAH: "₴" };
-  // Поля дат на всём сайте: календарь открывается по щелчку в любом месте поля, не только по значку.
-  document.addEventListener("click", (e) => {
-    const input = e.target.closest?.('input[type="date"]');
-    if (input && !input.disabled && !input.readOnly) {
-      try { input.showPicker(); } catch { /* браузер без showPicker — остаётся значок */ }
+  // ---------- поле даты «дд.мм.гггг» ----------
+  // Каждое input[type=date] на сайте заменяется текстовым полем с неизменяемыми точками: щелчок выделяет
+  // блок (день, месяц или год), цифры меняют только его, стрелки ←/→ — соседний блок, ↑/↓ — ±1.
+  // Календарь — кнопкой справа. Само input[type=date] остаётся скрытым: в нём значение (ГГГГ-ММ-ДД)
+  // для форм и фильтров, и из него открывается календарь браузера.
+  const CALENDAR_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>';
+  const DATE_SEGMENTS = [[0, 2, "дд"], [3, 5, "мм"], [6, 10, "гггг"]];
+  const DATE_BLANK = "дд.мм.гггг";
+  const valueProp = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+
+  function enhanceDate(native) {
+    if (native.dataset.dateField) return native._dateText;
+    native.dataset.dateField = "1";
+    const wrap = document.createElement("span");
+    wrap.className = "date-field";
+    const text = document.createElement("input");
+    text.type = "text";
+    text.inputMode = "numeric";
+    text.autocomplete = "off";
+    text.placeholder = DATE_BLANK;
+    text.className = native.className;
+    text.required = native.required;
+    native.required = false;  // проверяет текстовое поле: скрытое браузер не может подсветить
+    text.setAttribute("aria-label", native.getAttribute("aria-label") || "Дата, дд.мм.гггг");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "date-btn";
+    btn.tabIndex = -1;
+    btn.title = "Выбрать в календаре";
+    btn.setAttribute("aria-label", "Выбрать в календаре");
+    btn.innerHTML = CALENDAR_ICON;
+    native.replaceWith(wrap);
+    native.classList.add("date-native");
+    native.tabIndex = -1;
+    native.setAttribute("aria-hidden", "true");
+    wrap.append(text, btn, native);
+    native._dateText = text;
+    text._dateNative = native;
+
+    let seg = 0, typed = "";  // выбранный блок и набранные в нём цифры
+    const fromIso = (iso) => iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "";
+    const show = () => { text.value = fromIso(valueProp.get.call(native)); };
+    // Программная запись в скрытое поле (сброс фильтров, подстановка значения) — видна и в тексте.
+    Object.defineProperty(native, "value", {
+      configurable: true,
+      get: () => valueProp.get.call(native),
+      set: (v) => { valueProp.set.call(native, v); show(); },
+    });
+    show();
+
+    const select = () => {
+      const [a, b] = DATE_SEGMENTS[seg];
+      text.setSelectionRange(a, b);
+    };
+    const part = (i) => text.value.slice(DATE_SEGMENTS[i][0], DATE_SEGMENTS[i][1]);
+    const put = (i, s) => {
+      const [a, b] = DATE_SEGMENTS[i];
+      text.value = text.value.slice(0, a) + s + text.value.slice(b);
+    };
+    // Текст → скрытое поле: полная правильная дата — записать и сообщить формам; иначе пусто.
+    const commit = () => {
+      const [d, m, y] = [0, 1, 2].map(part);
+      let iso = "";
+      if (/^\d{2}$/.test(d) && /^\d{2}$/.test(m) && /^\d{4}$/.test(y)) {
+        const dt = new Date(Date.UTC(+y, +m - 1, +d));
+        if (dt.getUTCDate() === +d && dt.getUTCMonth() === +m - 1) iso = `${y}-${m}-${d}`;
+      }
+      const partial = text.value && text.value !== DATE_BLANK;
+      text.setCustomValidity(partial && !iso ? "Введите дату полностью: дд.мм.гггг"
+        : iso && native.max && iso > native.max ? `Дата не позже ${fromIso(native.max)}`
+        : iso && native.min && iso < native.min ? `Дата не раньше ${fromIso(native.min)}` : "");
+      if (iso !== valueProp.get.call(native)) {
+        valueProp.set.call(native, iso);
+        native.dispatchEvent(new Event("input", { bubbles: true }));
+        native.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    };
+    const pick = (i) => { seg = Math.max(0, Math.min(2, i)); typed = ""; select(); };
+    text._pick = pick;
+    const segAt = (pos) => pos <= 2 ? 0 : pos <= 5 ? 1 : 2;
+
+    function digit(ch) {
+      if (!text.value) text.value = DATE_BLANK;
+      typed += ch;
+      const width = DATE_SEGMENTS[seg][1] - DATE_SEGMENTS[seg][0];
+      put(seg, typed.padStart(width, "0"));
+      // День: после «4»–«9» второй цифры не бывает; месяц — после «2»–«9»; год — после 4 цифр.
+      const full = typed.length >= width || (seg === 0 && +typed > 3) || (seg === 1 && +typed > 1);
+      commit();
+      if (full) { if (seg < 2) pick(seg + 1); else { typed = ""; select(); } } else select();
     }
-  });
+
+    function step(delta) {
+      if (!text.value || text.value === DATE_BLANK) text.value = fromIso(native.max && native.max < todayIso() ? native.max : todayIso());
+      const v = parseInt(part(seg), 10);
+      const [lo, hi] = [[1, 31], [1, 12], [1900, 2100]][seg];
+      const next = isNaN(v) ? lo : v + delta > hi ? lo : v + delta < lo ? hi : v + delta;
+      put(seg, String(next).padStart(seg === 2 ? 4 : 2, "0"));
+      typed = "";
+      commit();
+      select();
+    }
+
+    let clicking = false, wasBlank = false;
+    text.addEventListener("mousedown", () => { clicking = true; wasBlank = !text.value || text.value === DATE_BLANK; });
+    text.addEventListener("focus", () => {
+      text._pickerOpen = false;
+      if (!text.value) text.value = DATE_BLANK;
+      // Клавиатурой (Tab, двойной щелчок по ячейке) — с дня; щелчком — блок под курсором (его выделит mouseup).
+      if (!clicking) setTimeout(() => { if (document.activeElement === text) select(); }, 0);
+    });
+    text.addEventListener("mouseup", () => {
+      clicking = false;
+      pick(wasBlank ? 0 : segAt(text.selectionStart ?? 0));
+    });
+    text.addEventListener("blur", () => { if (text.value === DATE_BLANK) text.value = ""; commit(); typed = ""; });
+    text.addEventListener("keydown", (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;  // копировать/вставить
+      if (/^\d$/.test(e.key)) { e.preventDefault(); digit(e.key); return; }
+      const moves = { ArrowLeft: -1, ArrowRight: 1, ".": 1, "/": 1, ",": 1, "-": 1 };
+      if (e.key in moves) { e.preventDefault(); pick(seg + moves[e.key]); return; }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); step(e.key === "ArrowUp" ? 1 : -1); return; }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        if (!text.value) return;
+        put(seg, DATE_SEGMENTS[seg][2]);
+        typed = "";
+        commit();
+        select();
+        return;
+      }
+      if (e.key.length === 1) e.preventDefault();  // буквы и прочее не вводятся; Tab, Enter, Esc — как обычно
+    });
+    // Ввод без keydown (экранная клавиатура, автозаполнение): цифры — как с клавиатуры.
+    text.addEventListener("beforeinput", (e) => {
+      if (e.inputType === "insertText" && e.data) {
+        e.preventDefault();
+        [...e.data].filter((c) => /\d/.test(c)).forEach(digit);
+      } else if (e.inputType !== "insertFromPaste") e.preventDefault();
+    });
+    text.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const s = (e.clipboardData.getData("text") || "").trim();
+      const m = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/) || s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return;
+      const [d, mo, y] = m[1].length === 4 ? [m[3], m[2], m[1]] : [m[1], m[2], m[3]];
+      text.value = `${d.padStart(2, "0")}.${mo.padStart(2, "0")}.${y}`;
+      commit();
+      pick(0);
+    });
+    // Календарь: выбранная в нём дата приходит в скрытое поле.
+    btn.addEventListener("mousedown", (e) => e.preventDefault());  // фокус остаётся в тексте
+    btn.addEventListener("click", () => {
+      text._pickerOpen = true;  // текст может потерять фокус, пока открыт календарь, — это не конец правки
+      try { native.showPicker(); } catch { text._pickerOpen = false; text.focus(); }
+    });
+    native.addEventListener("change", (e) => {
+      if (!e.isTrusted) return;
+      text._pickerOpen = false;
+      show();
+      text.setCustomValidity("");
+      text.dispatchEvent(new CustomEvent("datepicked"));
+      if (document.activeElement !== text) text.focus();
+      pick(0);
+    });
+    return text;
+  }
+
+  const todayIso = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Moscow" });
+  const enhanceDatesIn = (root) => root.querySelectorAll?.('input[type="date"]:not([data-date-field])').forEach(enhanceDate);
+  new MutationObserver((records) => records.forEach((r) => r.addedNodes.forEach((n) => {
+    if (n.nodeType !== 1) return;
+    if (n.matches('input[type="date"]')) enhanceDate(n); else enhanceDatesIn(n);
+  }))).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener("DOMContentLoaded", () => enhanceDatesIn(document));
+  enhanceDatesIn(document);
+
   const TRASH_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
   const FX_SOURCE = { steam: "курс Steam", cbr: "курс ЦБ на дату", usd: "", manual: "курс задан вручную" };
 
@@ -623,8 +793,10 @@ const SF = (() => {
       control.className = "cell-editor";
       td.ondblclick = null;
       td.replaceChildren(control);
-      control.focus();
-      if (control.select) control.select();
+      // Дата — поле «дд.мм.гггг»: блоки день/месяц/год правятся по отдельности, календарь — кнопкой.
+      const input = field === "date" ? enhanceDate(control) : control;
+      input.focus();
+      if (field === "date") input._pick(0); else if (input.select) input.select();
       let done = false;
       const finish = async (commit) => {
         if (done) return;
@@ -639,11 +811,15 @@ const SF = (() => {
           table.render();
         }
       };
-      control.addEventListener("keydown", (e) => {
+      input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") finish(true);
         if (e.key === "Escape") finish(false);
       });
-      control.addEventListener("blur", () => finish(true));
+      // Пока открыт календарь, текст может терять фокус — правку закончит выбор даты или уход из поля потом.
+      input.addEventListener("blur", () => setTimeout(() => {
+        if (document.activeElement !== input && !input._pickerOpen) finish(true);
+      }, 0));
+      input.addEventListener("datepicked", () => finish(true));
       if (control.tagName === "SELECT") control.addEventListener("change", () => finish(true));
     }
 

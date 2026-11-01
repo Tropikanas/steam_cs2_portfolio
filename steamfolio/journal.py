@@ -36,9 +36,6 @@ KIND_NAMES = {
     "transfer": "перенос на аккаунт",
     "position_removed": "позиция удалена",
 }
-# Поля исполнения ордера, которые можно изменить: предмет, валюта и аккаунт задаются ордером.
-FILL_EDITABLE_FIELDS = ("op_date", "quantity", "price", "fx_rate", "fx_source", "comment")
-
 
 class JournalError(Exception):
     """Действие отклонено. violations — что мешает, по одной строке на операцию."""
@@ -150,10 +147,10 @@ class Journal:
                             comment=comment))
 
     def edit(self, op_id: int, **changes) -> int:
-        """Изменить покупку, продажу или исполнение ордера. Пишется отдельной операцией «было → стало»."""
+        """Изменить покупку, продажу или исполнение ордера. Пишется отдельной операцией «было → стало».
+        Исполнение ордера правится как обычная покупка: на сам ордер правка не влияет."""
         target = self.current_op(op_id)
-        allowed = FILL_EDITABLE_FIELDS if target.kind == "order_filled" else EDITABLE_FIELDS
-        unknown = set(changes) - set(allowed)
+        unknown = set(changes) - set(EDITABLE_FIELDS)
         if unknown:
             raise JournalError(f"нельзя изменить поля: {', '.join(sorted(unknown))}")
         if "currency" in changes:

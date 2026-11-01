@@ -496,7 +496,7 @@ const SF = (() => {
     // Вкладки страницы: «Текущий портфель», «Закрытые позиции», «Ордера» (выбранная — в адресе: #closed, #orders).
     const closed = { checked: false };
     const orders = ordersPage({ summary: "o-summary", table: "o-table", counter: "o-rows-count",
-      btnOrder: "btn-order", btnAccounts: "o-btn-accounts" });
+      btnOrder: "btn-order" });
     function showPane() {
       const pane = ["closed", "orders", "rates"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "positions";
       document.querySelectorAll("#subtabs a").forEach((a) => a.classList.toggle("active", a.dataset.pane === pane));
@@ -583,8 +583,6 @@ const SF = (() => {
     // Строка из одной покупки правится прямо в ячейке; из нескольких — сначала выбирается покупка.
     // Любая правка — это «покупка изменена» в журнале: средняя, прибыль и графики пересчитываются, правку можно откатить.
 
-    const FILL_FIELDS = ["date", "quantity", "price"];  // у покупки по ордеру валюту и аккаунт задаёт ордер
-
     function bindEdit(td, r, field) {
       td.classList.add("editable");
       td.title = td.title || "Двойной щелчок — изменить";
@@ -614,10 +612,6 @@ const SF = (() => {
     }
 
     function editInCell(td, b, field) {
-      if (b.kind === "order_filled" && !FILL_FIELDS.includes(field)) {
-        toast("Это покупка по ордеру — её валюту и аккаунт задаёт ордер", true);
-        return;
-      }
       const control = field === "currency" || field === "account_id" ? document.createElement("select") : document.createElement("input");
       if (field === "currency") control.innerHTML = currencyOptions().map((o) => `<option value="${esc(o.value)}">${esc(o.value)}</option>`).join("");
       if (field === "account_id") control.innerHTML = accountChoices(b).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
@@ -673,14 +667,12 @@ const SF = (() => {
           { name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: b.quantity }],
         { name: "price", label: `Цена за штуку, ${b.currency}`, inputmode: "decimal", value: String(b.price).replace(".", ","),
           attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' },
-      ];
-      if (!fill) {
-        layout.push([{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: b.currency },
+        [{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: b.currency },
           { name: "account_id", label: "Аккаунт", type: "select",
-            options: accountChoices(b).map((a) => ({ value: a.id, label: a.name })), value: b.account_id }]);
-      }
+            options: accountChoices(b).map((a) => ({ value: a.id, label: a.name })), value: b.account_id }],
+      ];
       layout.push({ name: "_note", type: "static", label: "", required: false, html: `<span class="muted small">Покупка #${b.op_id} от ${date(b.date)}.
-        ${fill ? "Покупка по ордеру: валюту и аккаунт задаёт ордер. " : ""}Изменение запишется в журнал как «покупка изменена» — его можно откатить.</span>` });
+        ${fill ? "Куплено по ордеру — правка меняет только портфель, ордер не затрагивает. " : ""}Изменение запишется в журнал как «покупка изменена» — его можно откатить.</span>` });
       const ctx = openForm({
         title: "Изменить покупку",
         layout,
@@ -689,8 +681,8 @@ const SF = (() => {
           if (v.date !== b.date) changes.date = v.date;
           if (+v.quantity !== b.quantity) changes.quantity = +v.quantity;
           if (parseNum(v.price) !== b.price) changes.price = v.price;
-          if (!fill && v.currency !== b.currency) changes.currency = v.currency;
-          if (!fill && +v.account_id !== b.account_id) changes.account_id = +v.account_id;
+          if (v.currency !== b.currency) changes.currency = v.currency;
+          if (+v.account_id !== b.account_id) changes.account_id = +v.account_id;
           if (!Object.keys(changes).length) return;
           await saveEdit(b, changes);
         },
@@ -735,7 +727,7 @@ const SF = (() => {
       const s = data.summary;
       document.getElementById("summary").innerHTML = closed.checked ? ""
         : holdingTiles(s, (n) => `без цены: ${n} — учтены по себестоимости`);
-      // Продажи всегда по аккаунтам — «Свернуть аккаунты» к ним не относится.
+      // Продажи всегда по аккаунтам — «Объединить строки» к ним не относится.
       collapse.disabled = closed.checked;
       table = makeTable(document.getElementById("table"), columns(), {
         storageKey: closed.checked ? "closed" : "portfolio",
@@ -937,7 +929,8 @@ const SF = (() => {
     collapse.addEventListener("change", () => { store.set("collapse", collapse.checked ? "1" : "0"); reload(); });
     document.getElementById("btn-excel").onclick = (e) => exportExcel(e.currentTarget);
     document.getElementById("btn-buy").onclick = () => requireAccounts(buyForm);
-    document.getElementById("btn-accounts").onclick = () => accountsDialog(reload);
+    // «Список аккаунтов» — один на всю страницу: после правок обновляются и портфель, и ордера.
+    document.getElementById("btn-accounts").onclick = () => accountsDialog(() => Promise.all([reload(), orders.reload()]));
     loadMeta().then(showPane).catch((e) => toast(e.message, true));
   }
 
@@ -1102,7 +1095,6 @@ const SF = (() => {
     }
 
     document.getElementById(ids.btnOrder).onclick = () => requireAccounts(orderForm);
-    document.getElementById(ids.btnAccounts).onclick = () => accountsDialog(reload);
     return { reload: () => reload().catch((e) => toast(e.message, true)) };
   }
 
@@ -1246,19 +1238,16 @@ const SF = (() => {
 
     function editForm(r) {
       const c = r.current;
-      const fill = r.kind === "order_filled";
+      // Исполнение ордера правится как обычная покупка — правка меняет только портфель, не ордер.
       const accounts = Object.entries(accountsById).map(([id, name]) => ({ value: +id, label: name }));
-      const layout = [];
-      if (!fill) layout.push({ name: "item", label: "Предмет", type: "item", value: c.item });
-      layout.push(
+      const layout = [
+        { name: "item", label: "Предмет", type: "item", value: c.item },
         [{ name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: c.quantity },
           { name: "price", label: r.kind === "sell" ? "Чистая цена за штуку" : "Цена за штуку", inputmode: "decimal",
             value: String(c.price).replace(".", ","), attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' }],
-      );
-      if (!fill) layout.push(
         [{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: c.currency },
           { name: "account_id", label: "Аккаунт", type: "select", options: accounts, value: c.account_id }],
-      );
+      ];
       layout.push(
         { name: "date", label: "Дата", type: "date", value: c.date, attrs: `max="${meta.today}"` },
         { name: "fx_rate", label: "Курс к USD, если нужно задать вручную", required: false, inputmode: "decimal",
@@ -1272,7 +1261,7 @@ const SF = (() => {
         onSubmit: async (v) => {
           await api("POST", `/api/journal/${r.id}/edit`, {
             date: v.date, quantity: +v.quantity, price: v.price, comment: v.comment, fx_rate: v.fx_rate || null,
-            ...(fill ? {} : { item: v.item, currency: v.currency, account_id: +v.account_id }),
+            item: v.item, currency: v.currency, account_id: +v.account_id,
           });
           toast(`Изменение записано в журнал`);
           await reload();

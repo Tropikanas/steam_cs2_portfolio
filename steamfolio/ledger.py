@@ -321,7 +321,11 @@ def _brings_into(op: Op, key: RowKey) -> bool:
 def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:
     ledger = Ledger()
     current = effective_ops(ops)
-    valid_fills = _replay_orders(ledger, sorted((op for op in current if op.kind.startswith("order_")), key=lambda o: o.entry_key))
+    # Ордер видит исполнение таким, каким оно было внесено: дальнейшие правки покупки (количество, цена,
+    # предмет, валюта, аккаунт) меняют только портфель, не остаток ордера.
+    as_entered = {op.id: op for op in ops}
+    order_ops = [as_entered[op.id] if op.kind == "order_filled" else op for op in current if op.kind.startswith("order_")]
+    valid_fills = _replay_orders(ledger, sorted(order_ops, key=lambda o: o.entry_key))
     timeline = [op for op in current if op.kind in ("buy", "sell", "transfer", "position_removed") or op.id in valid_fills]
     return ledger, sorted(timeline, key=lambda o: o.sort_key)
 

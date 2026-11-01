@@ -227,6 +227,19 @@ def test_rollback_fill_returns_quantity_to_order(journal, acc):
     assert pos(journal, acc).quantity == 0
 
 
+def test_editing_fill_changes_only_portfolio_not_order(journal, acc, acc2):
+    # Покупка по ордеру после переноса в портфель правится свободно: валюта, аккаунт, количество.
+    order = journal.place_order(CASE, acc, RUB, 10, 5000)
+    fill = journal.fill_order(order, quantity=4)
+    journal.edit(fill, account_id=acc2, currency=USD, quantity=7, price=60)
+    ledger = journal.ledger()
+    assert ledger.orders[order].quantity == 6 and ledger.orders[order].status == "open"  # ордер как был
+    assert pos(journal, acc2, USD).quantity == 7 and pos(journal, acc).quantity == 0
+    # ордер по-прежнему можно исполнить на весь остаток
+    journal.fill_order(order)
+    assert journal.ledger().orders[order].status == "filled"
+
+
 def test_rollback_buy_blocked_by_sale_and_names_it(journal, acc):
     buy = journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
     sale = journal.sell(CASE, acc, RUB, 3, 2000, D("2026-01-05"))
@@ -321,10 +334,10 @@ def test_edit_sale(journal, acc):
     assert journal.ledger().sales[0].profit == 2000
 
 
-def test_edit_fill_limits_fields(journal, acc, acc2):
+def test_edit_fill_any_field_order_stays_filled(journal, acc, acc2):
     order = journal.place_order(CASE, acc, RUB, 5, 1000)
     fill = journal.fill_order(order, quantity=5)
-    with pytest.raises(JournalError, match="account_id"):
-        journal.edit(fill, account_id=acc2)
-    journal.edit(fill, price=900)
-    assert pos(journal, acc).avg_price == 900
+    journal.edit(fill, account_id=acc2)
+    journal.edit(fill, price=900, quantity=3)
+    assert pos(journal, acc2).avg_price == 900 and pos(journal, acc2).quantity == 3
+    assert journal.ledger().orders[order].status == "filled"  # исполнен на 5, как и был

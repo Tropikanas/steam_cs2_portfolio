@@ -1,19 +1,21 @@
 {% extends "base.html" %}
 {% block title %}Портфолио · Портфолио Steam{% endblock %}
 {% block content %}
-<nav class="subtabs" id="subtabs" role="tablist">
-  <a href="#positions" data-pane="positions" role="tab">Текущий портфель</a>
-  <a href="#closed" data-pane="closed" role="tab">Закрытые позиции</a>
-  <a href="#orders" data-pane="orders" role="tab">Ордера</a>
-  <a href="#rates" data-pane="rates" role="tab">Курс валют</a>
-</nav>
+<div class="subtabs-row">
+  <nav class="subtabs" id="subtabs" role="tablist">
+    <a href="#positions" data-pane="positions" role="tab">Текущий портфель</a>
+    <a href="#closed" data-pane="closed" role="tab">Закрытые позиции</a>
+    <a href="#orders" data-pane="orders" role="tab">Ордера</a>
+    <a href="#rates" data-pane="rates" role="tab">Курс валют</a>
+  </nav>
+  <button id="btn-accounts">Список аккаунтов</button>
+</div>
 
 <div id="pane-positions">
   <section class="summary" id="summary"></section>
   <div class="toolbar">
     <button class="primary" id="btn-buy">Добавить закупленное</button>
-    <button id="btn-accounts">Аккаунты</button>
-    <label class="toggle" id="collapse-toggle"><input type="checkbox" id="opt-collapse"> Свернуть аккаунты</label>
+    <label class="toggle" id="collapse-toggle"><input type="checkbox" id="opt-collapse"> Объединить строки</label>
     <span class="spacer"></span>
     <span class="muted small" id="rows-count"></span>
     <button id="btn-excel" title="Скачать портфель, закрытые позиции, ордера и журнал одним файлом">Выгрузить в Excel</button>
@@ -26,7 +28,6 @@
   <section class="summary" id="o-summary"></section>
   <div class="toolbar">
     <button class="primary" id="btn-order">Новый ордер</button>
-    <button id="o-btn-accounts">Аккаунты</button>
     <span class="spacer"></span>
     <span class="muted small" id="o-rows-count"></span>
   </div>

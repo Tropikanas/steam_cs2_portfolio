@@ -191,6 +191,9 @@ td.editable:hover { background: var(--surface-2); }
 
 /* вкладки внутри страницы */
 .subtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+/* вкладки страницы и кнопка справа вверху («Список аккаунтов») */
+.subtabs-row { display: flex; align-items: flex-start; gap: 12px; }
+.subtabs-row .subtabs { flex: 1; min-width: 0; }
 .subtabs a { padding: 8px 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; }
 .subtabs a:hover { color: var(--text); }
 .subtabs a.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }

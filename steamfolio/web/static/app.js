@@ -495,6 +495,9 @@ const SF = (() => {
       { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames, values: (r) => [r.account],
         html: (r) => esc(r.account) },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
+      { id: "actions", title: "", cls: "actions", sortable: false,
+        html: () => `<button class="small danger icon-btn" title="Удалить продажу" aria-label="Удалить продажу">${TRASH_ICON}</button>`,
+        bind: (td, r) => { td.querySelector("button").onclick = () => deleteSaleForm(r); } },
     ];
     const openColumns = () => [
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
@@ -713,6 +716,25 @@ const SF = (() => {
         onSubmit: async (v) => {
           await api("POST", "/api/remove-position", { item: r.item, currency: r.currency, account_id: +v.account_id });
           toast(`Позиция удалена: ${r.item}`);
+          await reload();
+        },
+      });
+    }
+
+    // Удаление строки «Закрытых позиций» = удаление продажи: штуки возвращаются в портфель.
+    function deleteSaleForm(r) {
+      openForm({
+        title: `Удалить продажу: ${r.item}`,
+        submit: "Удалить и вернуть в портфолио",
+        layout: [{ name: "_note", type: "static", label: "", required: false, html: `<div class="info">
+          <p><b>Строка будет возвращена в портфолио:</b> ${num(r.quantity, 0)} шт. <b>${esc(r.item)}</b>
+          на аккаунт <b>${esc(r.account)}</b> в валюте <b>${esc(r.currency)}</b> по средней цене ${money(r.avg_price, r.currency, true)}.</p>
+          <p>Продажа от ${date(r.sale_date)} по ${money(r.sale_price, r.currency)} будет удалена, прибыль по ней
+          (${r.profit > 0 ? "+" : ""}${money(r.profit, r.currency)}) исчезнет из статистики.<br>
+          <span class="muted small">В журнал запишется операция «продажа удалена» — её можно откатить.</span></p></div>` }],
+        onSubmit: async () => {
+          await api("POST", `/api/journal/${r.op_id}/delete`);
+          toast(`Продажа удалена, ${r.item} — снова в портфолио`);
           await reload();
         },
       });

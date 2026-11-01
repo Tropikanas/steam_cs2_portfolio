@@ -169,6 +169,20 @@ def test_stats_series_by_currency(client):
     assert len(client.get("/api/meta").json()["currencies"]) == 39
 
 
+def test_delete_closed_row_returns_to_portfolio(client):
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 3}
+    client.post("/api/buy", json={**trade, "price": "10"})
+    client.post("/api/sell", json={**trade, "price": "50"})
+    [sale] = client.get("/api/portfolio?closed=true").json()["rows"]
+    assert client.get("/api/portfolio").json()["rows"] == []
+    assert client.post(f"/api/journal/{sale['op_id']}/delete").status_code == 200
+    assert client.get("/api/portfolio?closed=true").json()["rows"] == []
+    assert client.get("/api/portfolio").json()["rows"][0]["quantity"] == 3
+    assert client.get("/api/stats").json()["summary"]["total_profit_usd"] == 0
+
+
 def test_export_endpoint(client):
     assert client.post("/api/export", json={}).status_code == 401
     login(client)

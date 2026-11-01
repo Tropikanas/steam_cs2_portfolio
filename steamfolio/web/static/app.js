@@ -1313,7 +1313,105 @@ const SF = (() => {
     const signed = signedUsd;
     let data, lineChart, pieChart, typeNames = [];
     let period = +store.get("stats.period", "0");
-    let panEnd = null;  // конец окна графика, сдвинутый ползунком; null — по сегодняшний день
+    const DAY = 86400000;
+    let panEnd = null;  // конец окна графика, сдвинутый сектором; null — по сегодняшний день
+    let zoomSpan = null;  // ширина участка, выделенного двумя щелчками; null — ширина выбранного периода
+    let zoomStart = null, zoomHover = null;  // первая граница выделения и где сейчас курсор
+    let nav = null;  // полоса с сектором: {first, last, span, clampEnd, fmtDay}, null — листать некуда
+
+    const inPlot = (chart, evt) => {
+      const a = chart.chartArea;
+      return evt.x >= a.left && evt.x <= a.right && evt.y >= a.top && evt.y <= a.bottom;
+    };
+
+    // Выделение участка: первый щелчок — вертикальная линия, второй — вторая граница; график сужается до них.
+    function pickZoomEdge(chart, evt) {
+      if (!inPlot(chart, evt)) return;
+      const x = chart.scales.x.getValueForPixel(evt.x);
+      if (zoomStart == null) {
+        zoomStart = x;
+        chart.draw();
+        return;
+      }
+      const [a, b] = [Math.min(zoomStart, x), Math.max(zoomStart, x)];
+      zoomStart = zoomHover = null;
+      if (b - a < 3600000) { chart.draw(); return; }  // щелчок в ту же точку — отмена
+      zoomSpan = b - a;
+      panEnd = b;
+      renderLine();
+    }
+
+    const zoomMarker = {
+      id: "zoomMarker",
+      afterDatasetsDraw(chart) {
+        if (zoomStart == null) return;
+        const { ctx, chartArea: area, scales: { x } } = chart;
+        const px = (v) => Math.min(Math.max(x.getPixelForValue(v), area.left), area.right);
+        ctx.save();
+        if (zoomHover != null) {
+          ctx.fillStyle = alpha(css("--accent"), 0.12);
+          const [l, r] = [px(zoomStart), px(zoomHover)].sort((p, q) => p - q);
+          ctx.fillRect(l, area.top, r - l, area.bottom - area.top);
+        }
+        ctx.strokeStyle = css("--accent");
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(px(zoomStart), area.top);
+        ctx.lineTo(px(zoomStart), area.bottom);
+        ctx.stroke();
+        ctx.restore();
+      },
+    };
+
+    // Сдвинуть окно графика так, чтобы оно кончалось в end; сектор на полосе — следом.
+    function moveWindow(end) {
+      if (!nav) return;
+      end = nav.clampEnd(end);
+      panEnd = end >= nav.last ? null : end;  // у правого края окно снова «прилипает» к сегодня
+      const total = nav.last - nav.first;
+      Object.assign(lineChart.options.scales.x, { min: end - nav.span, max: end });
+      lineChart.update("none");
+      const win = el("nav-window");
+      win.style.left = `${(end - nav.span - nav.first) / total * 100}%`;
+      win.style.width = `${nav.span / total * 100}%`;
+      win.setAttribute("aria-valuetext", `${nav.fmtDay(end - nav.span)} — ${nav.fmtDay(end)}`);
+      el("nav-from").textContent = nav.fmtDay(nav.first);
+      el("nav-to").textContent = nav.fmtDay(nav.last);
+      el("nav-label").textContent = `${nav.fmtDay(end - nav.span)} — ${nav.fmtDay(end)}`;
+    }
+
+    // Сектор тащат мышью или пальцем; щелчок по полосе мимо сектора ставит сектор серединой в эту точку.
+    (function bindNav() {
+      const track = el("nav-track"), win = el("nav-window");
+      const msPerPx = () => (nav.last - nav.first) / track.clientWidth;
+      let drag = null;
+      win.addEventListener("pointerdown", (e) => {
+        if (!nav) return;
+        e.preventDefault();
+        try { win.setPointerCapture(e.pointerId); } catch { /* указатель уже отпущен */ }
+        drag = { x: e.clientX, end: lineChart.options.scales.x.max };
+        win.classList.add("dragging");
+      });
+      win.addEventListener("pointermove", (e) => {
+        if (drag) moveWindow(drag.end + (e.clientX - drag.x) * msPerPx());
+      });
+      const stop = () => { drag = null; win.classList.remove("dragging"); };
+      win.addEventListener("pointerup", stop);
+      win.addEventListener("pointercancel", stop);
+      track.addEventListener("pointerdown", (e) => {
+        if (!nav || e.target !== track) return;
+        const at = nav.first + (e.clientX - track.getBoundingClientRect().left) * msPerPx();
+        moveWindow(at + nav.span / 2);
+      });
+      win.addEventListener("keydown", (e) => {
+        const step = { ArrowLeft: -DAY, ArrowRight: DAY, PageUp: -nav.span, PageDown: nav.span }[e.key];
+        if (nav && step) { e.preventDefault(); moveWindow(lineChart.options.scales.x.max + step); }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && zoomStart != null) { zoomStart = zoomHover = null; lineChart?.draw(); }
+      });
+    })();
     let chartCurrency = store.get("stats.currency", "TOTAL");
     let bestSort = store.get("stats.best", "pct");
     let drill = null;
@@ -1331,9 +1429,10 @@ const SF = (() => {
     }
 
     function renderLine() {
+      zoomStart = zoomHover = null;  // график перерисован — начатое выделение не продолжается
       const s = data.series;
       const cur = s.currency || "USD";
-      document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", +b.dataset.days === period));
+      document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("active", !zoomSpan && +b.dataset.days === period));
       const axis = (v) => cur === "USD" ? "$" + num(v, 0) : `${num(v, 0)} ${SIGN[cur] || cur}`;
       // Оценка портфеля лежит слоем поверх реализованной прибыли: y = оценка + прибыль на этот момент,
       // настоящее значение — в v (его показывает подсказка). «Вложено» — отдельная линия без заливки.
@@ -1361,27 +1460,29 @@ const SF = (() => {
         ds("Вложено", s.invested, INVESTED, { stepped: "before", fill: false, borderWidth: 2.5 }),
       ].filter((d) => d.data.length);
       const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
-      // Окно периода: [конец − период, конец]; ползунок под графиком двигает конец окна в прошлое.
+      // Окно: [конец − ширина, конец]. Ширина — выбранный период или участок, выделенный двумя щелчками.
+      // Сектор на полосе под графиком — это окно; его тащат влево-вправо по датам.
       const xs = datasets.flatMap((d) => d.data.map((p) => p.x));
       const first = xs.length ? Math.min(...xs) : Date.now();
       const last = Math.max(Date.now(), ...xs);
-      const span = period * 86400000;
-      const pannable = period > 0 && last - first > span;
-      const end = pannable && panEnd != null ? Math.min(Math.max(panEnd, first + span), last) : last;
-      const min = period ? end - span : undefined;
-      const max = period ? end : undefined;
-      const slider = el("line-pan");
-      el("line-pan-box").classList.toggle("hidden", !pannable);
-      if (pannable) {
-        Object.assign(slider, { min: first + span, max: last, step: 3600000 });
-        slider.value = end;
-      }
+      const span = zoomSpan || period * DAY;
+      const pannable = span > 0 && last - first > span;
+      const clampEnd = (e) => Math.min(Math.max(e, first + span), last);
+      const end = pannable && panEnd != null ? clampEnd(panEnd) : last;
+      const min = span ? end - span : undefined;
+      const max = span ? end : undefined;
       const config = {
         type: "line",
         data: { datasets },
         options: {
           maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
           interaction: { mode: "nearest", axis: "x", intersect: false },
+          onClick: (evt, _, chart) => pickZoomEdge(chart, evt),
+          onHover: (evt, _, chart) => {
+            if (zoomStart == null) return;
+            zoomHover = inPlot(chart, evt) ? chart.scales.x.getValueForPixel(evt.x) : null;
+            chart.draw();
+          },
           scales: {
             x: { type: "linear", min, max, ticks: { callback: fmtDay, maxTicksLimit: 8 }, grid: { display: false } },
             y: { beginAtZero: true, ticks: { callback: axis } },
@@ -1397,21 +1498,14 @@ const SF = (() => {
             },
           },
         },
+        plugins: [zoomMarker],
       };
       if (lineChart) lineChart.destroy();
       lineChart = new Chart(el("line"), config);
-      const showWindow = () => {
-        const x = lineChart.options.scales.x;
-        el("line-pan-label").textContent = `${fmtDay(x.min)} — ${fmtDay(x.max)}`;
-      };
-      if (pannable) showWindow();
-      slider.oninput = () => {
-        // В самом правом положении окно снова «прилипает» к сегодняшнему дню.
-        panEnd = +slider.value >= +slider.max ? null : +slider.value;
-        Object.assign(lineChart.options.scales.x, { min: +slider.value - span, max: +slider.value });
-        lineChart.update("none");
-        showWindow();
-      };
+      el("zoom-reset").classList.toggle("hidden", !zoomSpan);
+      nav = pannable ? { first, last, span, clampEnd, fmtDay } : null;
+      el("line-nav").classList.toggle("hidden", !nav);
+      if (nav) moveWindow(end);
       const scope = chartCurrency === "TOTAL" ? "Все операции, суммы в USD по курсу на дату. "
         : `Только строки в ${cur}, суммы в ${cur} без пересчёта. `;
       el("line-note").textContent = !datasets.length
@@ -1512,9 +1606,13 @@ const SF = (() => {
     document.querySelectorAll("#period button").forEach((b) => b.onclick = () => {
       period = +b.dataset.days;
       store.set("stats.period", String(period));
-      panEnd = null;  // новый период — снова по сегодняшний день
+      panEnd = zoomSpan = null;  // новый период — без выделения, снова по сегодняшний день
       renderLine();
     });
+    el("zoom-reset").onclick = () => {
+      panEnd = zoomSpan = null;
+      renderLine();
+    };
     el("chart-currency").onchange = (e) => {
       chartCurrency = e.target.value;
       store.set("stats.currency", chartCurrency);

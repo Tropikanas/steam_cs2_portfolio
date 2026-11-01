@@ -15,10 +15,19 @@
     </div>
   </div>
   <div class="chart-box"><canvas id="line" aria-label="График стоимости портфеля и вложений"></canvas></div>
-  <div class="chart-pan hidden" id="line-pan-box">
-    <input type="range" id="line-pan" aria-label="Сдвинуть период графика в прошлое">
-    <span class="muted small" id="line-pan-label"></span>
+  <div class="chart-nav hidden" id="line-nav">
+    <div class="nav-track" id="nav-track">
+      <div class="nav-window" id="nav-window" tabindex="0" role="slider"
+           aria-label="Окно графика: перетащите влево-вправо по датам"></div>
+    </div>
+    <div class="nav-dates small muted">
+      <span id="nav-from"></span>
+      <span class="nav-label" id="nav-label"></span>
+      <span id="nav-to"></span>
+    </div>
   </div>
+  <p class="muted small chart-hint">Два щелчка по графику — показать только участок между ними (Esc — отменить первый щелчок).
+    <button class="link small hidden" id="zoom-reset">Сбросить выделение</button></p>
   <p class="muted small" id="line-note"></p>
 </section>
 

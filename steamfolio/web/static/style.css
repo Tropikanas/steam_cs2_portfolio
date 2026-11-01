@@ -100,10 +100,24 @@ main { padding: 16px; max-width: 1600px; margin: 0 auto; }
 }
 .summary:empty { display: none; }
 input[type="date"] { cursor: pointer; }
-/* ползунок под графиком: сдвиг выбранного периода в прошлое */
-.chart-pan { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
-.chart-pan input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); cursor: grab; padding: 0; border: 0; background: none; }
-.chart-pan span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* полоса под графиком: сектор = видимое окно, его тащат по датам */
+.chart-nav { margin-top: 10px; }
+.nav-track {
+  position: relative; height: 28px; border-radius: 6px; cursor: pointer;
+  background: var(--surface-2, rgba(127, 127, 127, .08)); border: 1px solid var(--border);
+  touch-action: none;
+}
+.nav-window {
+  position: absolute; top: -1px; bottom: -1px; min-width: 8px; box-sizing: border-box;
+  background: color-mix(in srgb, var(--accent) 22%, transparent); border: 2px solid var(--accent);
+  border-radius: 6px; cursor: grab; touch-action: none;
+}
+.nav-window.dragging { cursor: grabbing; }
+.nav-window:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.nav-dates { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.nav-label { color: var(--text); font-weight: 600; }
+.chart-hint { margin: 6px 0 0; }
+#line { cursor: crosshair; }
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   padding: 12px 16px; box-shadow: var(--shadow);

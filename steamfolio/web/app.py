@@ -402,16 +402,19 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         return {"order_id": order_id}
 
     @app.post("/api/orders/{order_id}/fill")
-    def fill_order(order_id: int, body: FillIn, conn: Conn, user: User) -> dict[str, Any]:
+    def fill_order(order_id: int, body: FillIn, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
         price = money(body.price) if body.price not in (None, "") else None
         op_id = journal(conn, user).fill_order(order_id, body.quantity, body.date, price, rate(body.fx_rate))
+        # Исполнение задним числом — история продаж для прошлых точек графика сразу, не ждать сбора цен.
+        background.add_task(fetch_prices_now)
         return {"op_id": op_id}
 
     @app.post("/api/orders/{order_id}/change")
-    def change_order(order_id: int, body: ChangeIn, conn: Conn, user: User) -> dict[str, Any]:
+    def change_order(order_id: int, body: ChangeIn, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
         op_id = journal(conn, user).change_order(
             order_id, money(body.price), body.quantity, body.comment.strip(), account_id=body.account_id,
             currency=currency(body.currency) if body.currency else None)
+        background.add_task(fetch_prices_now)  # новая валюта ордера — её цены сразу
         return {"op_id": op_id}
 
     @app.post("/api/orders/{order_id}/remove")

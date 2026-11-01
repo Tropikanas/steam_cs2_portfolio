@@ -1341,8 +1341,11 @@ const SF = (() => {
         fill: "origin", pointRadius: 0, pointHoverRadius: 3, borderWidth: 2, tension: 0, ...extra,
       });
       const onProfit = profit.length ? { target: 0 } : "origin";
+      // Ушла в минус — «убыток»: в легенде по последнему значению, в подсказке — по значению в точке.
+      const profitLabel = (v) => v < 0 ? "Реализованный убыток" : "Реализованная прибыль";
       const datasets = [
-        ds("Реализованная прибыль", profit, PROFIT, { stepped: "before", backgroundColor: alpha(PROFIT, 0.25) }),
+        ds(profitLabel(profit.length ? profit[profit.length - 1][1] : 0), profit, PROFIT,
+          { stepped: "before", backgroundColor: alpha(PROFIT, 0.25), isProfit: true }),
         ds("Текущая оценка портфеля", s.value, VALUE, { fill: onProfit }, true),
         ds("Оценка по истории продаж Steam", s.value_estimate, VALUE, { fill: onProfit, borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.08) }, true),
         ds("Вложено", s.invested, INVESTED, { stepped: "before", fill: false, borderWidth: 2.5 }),
@@ -1364,7 +1367,7 @@ const SF = (() => {
               itemSort: (a, b) => b.raw.v - a.raw.v,  // сверху — большее значение
               callbacks: {
                 title: (items) => dateTime(new Date(items[0].parsed.x).toISOString()),
-                label: (c) => `${c.dataset.label}: ${money(c.raw.v, cur)}`,
+                label: (c) => `${c.dataset.isProfit ? profitLabel(c.raw.v) : c.dataset.label}: ${money(c.raw.v, cur)}`,
               },
             },
           },
@@ -1378,7 +1381,7 @@ const SF = (() => {
         ? (chartCurrency === "TOTAL" ? "Данных пока нет — внесите покупки на вкладке «Портфолио»." : `Позиций в ${cur} нет.`)
         : scope + (s.value_estimate.length ? `До ${date(s.launch)} оценка портфеля — по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
         : "Оценка портфеля — по лучшему ордеру на покупку, точка раз в 6 часов.")
-          + " Реализованная прибыль — нарастающим итогом по продажам: цена продажи минус средняя цена покупки."
+          + " Реализованная прибыль (в минусе — убыток) — нарастающим итогом по продажам: цена продажи минус средняя цена покупки."
           + (profit.length ? " Оценка портфеля нарисована слоем поверх прибыли: верхний край синей заливки — их сумма." : "");
     }
 

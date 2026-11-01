@@ -190,6 +190,21 @@ def test_portfolio_tabs_and_row_purchases(client):
     assert moved["buys"] == [] and moved["single_op"] is None  # получена переносом
 
 
+def test_removed_purchases_are_not_part_of_row(client):
+    # Две ошибочные покупки удалены, потом внесена покупка задним числом — строка состоит только из неё.
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
+    for quantity in (200, 1200):
+        bought = client.post("/api/buy", json={**trade, "quantity": quantity, "price": "100", "date": "2026-10-31"})
+        assert bought.status_code == 200, bought.text
+        removed = client.post("/api/remove-position", json=trade)
+        assert removed.status_code == 200, removed.text
+    real = client.post("/api/buy", json={**trade, "quantity": 500, "price": "100", "date": "2026-10-27"}).json()["op_id"]
+    [row] = client.get("/api/portfolio").json()["rows"]
+    assert row["quantity"] == 500 and [b["op_id"] for b in row["buys"]] == [real] and row["single_op"]["op_id"] == real
+
+
 def test_delete_closed_row_returns_to_portfolio(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]

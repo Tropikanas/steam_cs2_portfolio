@@ -15,7 +15,7 @@ from steamfolio import catalog
 from steamfolio.collector import STALE_AFTER, latest_rates
 from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.journal import KIND_NAMES, Preview
-from steamfolio.ledger import DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, effective_ops
+from steamfolio.ledger import DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, RowKey, _brings_into, effective_ops
 from steamfolio.market import listing_url
 
 # Снимок «24 ч назад» может быть сделан чуть позже: сбор идёт раз в 6 часов со случайной задержкой.
@@ -93,6 +93,30 @@ def _row_ops(ops: list[Op]) -> dict[tuple[str, int, Currency], list[Op]]:
     return result
 
 
+def _without_removed(history: list[Op], key: RowKey) -> list[Op]:
+    """История строки без ошибочно внесённого: удаление позиции снимает самые поздние поступления
+    (как и на графике), полностью снятые покупки и само удаление из истории уходят."""
+    history = sorted(history, key=lambda o: o.sort_key)
+    left = {op.id: op.quantity for op in history if _brings_into(op, key)}
+    gone: set[int] = set()
+    for index, op in enumerate(history):
+        if op.kind != "position_removed":
+            continue
+        count = op.quantity
+        for prev in reversed(history[:index]):
+            if count <= 0:
+                break
+            if left.get(prev.id):
+                took = min(count, left[prev.id])
+                left[prev.id] -= took
+                count -= took
+                if not left[prev.id]:
+                    gone.add(prev.id)
+        if count <= 0:
+            gone.add(op.id)
+    return [op for op in history if op.id not in gone]
+
+
 def _buy_info(op: Op, account_names: dict[int, str]) -> dict[str, Any]:
     return {"op_id": op.id, "kind": op.kind, "date": op.op_date.isoformat(), "quantity": op.quantity,
             "price": _units(op.price), "currency": op.currency.name, "account_id": op.account_id,
@@ -160,7 +184,8 @@ def portfolio(
         for column, delta in PERIODS.items():
             row[column] = _pct(price, prices.at(name, currency, now - delta))
         # Покупки строки с последнего открытия позиции — их можно править из портфеля.
-        history = [op for p in group for op in row_ops.get(p.key, []) if op.op_date >= p.first_buy_date]
+        history = [op for p in group for op in _without_removed(
+            [op for op in row_ops.get(p.key, []) if op.op_date >= p.first_buy_date], p.key)]
         buys = [op for op in history if op.kind in ("buy", "order_filled")]
         row["buys"] = [_buy_info(op, account_names) for op in sorted(buys, key=lambda o: o.sort_key)]
         # Строка ровно из одной покупки правится прямо в ячейке.

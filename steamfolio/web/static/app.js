@@ -1686,7 +1686,15 @@ const SF = (() => {
             y: { beginAtZero: true, ticks: { callback: axis } },
           },
           plugins: {
-            legend: { labels: { boxWidth: 12, usePointStyle: true } },
+            // Легенда — отрезками линий, как на самом графике: оценка по истории продаж — пунктиром.
+            legend: { labels: {
+              usePointStyle: true, pointStyleWidth: 26,
+              generateLabels: (chart) => Chart.defaults.plugins.legend.labels.generateLabels(chart).map((item) => {
+                const d = chart.data.datasets[item.datasetIndex];
+                return { ...item, pointStyle: "line", fillStyle: "transparent", strokeStyle: d.borderColor,
+                  lineWidth: 2.5, lineDash: d.borderDash || [] };
+              }),
+            } },
             tooltip: {
               itemSort: (a, b) => b.raw.v - a.raw.v,  // сверху — большее значение
               callbacks: {

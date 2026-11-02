@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from steamfolio import alerts, auth, backup, catalog, collector, db, export, history, stats, telegram, views
+from steamfolio import alerts, auth, backup, catalog, collector, db, history, stats, telegram, views
 from steamfolio.clock import today_msk
 from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.fx import FxResolver, FxUnavailable
@@ -153,12 +153,6 @@ class AccountIn(BaseModel):
     hidden: bool | None = None
 
 
-class ExportIn(BaseModel):
-    # После фильтров на сайте: строки портфеля [предмет, id аккаунта, валюта] и продажи (id операций); None — всё.
-    open: list[tuple[str, int, str]] | None = None
-    closed: list[int] | None = None
-
-
 class AlertsIn(BaseModel):
     enabled: bool
     day_pct: float
@@ -289,10 +283,6 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     def stats_page(request: Request, user: User):
         return templates.TemplateResponse(request, "stats.html", {"tab": "stats", "user": user})
 
-    @app.get("/journal", response_class=HTMLResponse)
-    def journal_page(request: Request, user: User):
-        return templates.TemplateResponse(request, "journal.html", {"tab": "journal", "user": user})
-
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request, user: User):
         return templates.TemplateResponse(request, "settings.html", {"tab": "settings", "user": user})
@@ -315,7 +305,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
 
     @app.get("/api/orders")
     def orders_api(conn: Conn, user: User) -> dict[str, Any]:
-        return views.orders(conn, journal(conn, user).ledger(), PORTFOLIO_ID)
+        return views.orders(conn, journal(conn, user).orders(), PORTFOLIO_ID)
 
     @app.get("/api/rates")
     def rates_api(conn: Conn, user: User) -> dict[str, Any]:
@@ -367,7 +357,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
 
     @app.post("/api/remove-position")
     def remove_position(body: RemovePositionIn, conn: Conn, user: User) -> dict[str, Any]:
-        return {"op_id": journal(conn, user).remove_position(body.item, body.account_id, currency(body.currency))}
+        return {"removed": journal(conn, user).remove_position(body.item, body.account_id, currency(body.currency))}
 
     @app.post("/api/position-comment")
     def position_comment(body: CommentIn, conn: Conn, user: User) -> dict[str, Any]:
@@ -386,18 +376,6 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
                     (PORTFOLIO_ID, body.item, body.account_id, int(cur)),
                 )
         return {"ok": True}
-
-    @app.post("/api/export")
-    def export_xlsx(body: ExportIn, conn: Conn, user: User) -> Response:
-        j = journal(conn, user)
-        ops = j.ops()
-        only = None
-        if body.open is not None or body.closed is not None:
-            only = {"open": set(body.open or []), "closed": set(body.closed or [])}
-        content = export.build(conn, replay(ops), ops, PORTFOLIO_ID, only)
-        name = f"portfolio-{today_msk().isoformat()}.xlsx"
-        return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     # ---------- API: ордера ----------
 
@@ -460,36 +438,14 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
             raise ApiError(str(e)) from e
         return {"ok": True}
 
-    # ---------- API: журнал ----------
+    # ---------- API: правка и удаление покупок и продаж ----------
+    # Изменение и удаление могут вернуть позицию в портфель или поменять дату — цены и историю подтягиваем сразу.
 
-    @app.get("/api/journal")
-    def journal_api(conn: Conn, user: User) -> dict[str, Any]:
-        return views.journal(conn, journal(conn, user).ops(), PORTFOLIO_ID)
-
-    @app.get("/api/journal/{op_id}/preview")
-    def journal_preview(op_id: int, conn: Conn, user: User, action: str = "cancel") -> dict[str, Any]:
-        j = journal(conn, user)
-        result = j.preview_cancel(op_id) if action == "cancel" else j.preview_restore(op_id)
-        return views.preview(conn, result, j.ops(), PORTFOLIO_ID)
-
-    @app.post("/api/journal/{op_id}/cancel")
-    # Откат, возврат, изменение и удаление могут вернуть позицию в портфель — её цену подтягиваем сразу.
-    def journal_cancel(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
-        journal(conn, user).cancel(op_id)
-        background.add_task(fetch_prices_now)
-        return {"ok": True}
-
-    @app.post("/api/journal/{op_id}/restore")
-    def journal_restore(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
-        journal(conn, user).restore(op_id)
-        background.add_task(fetch_prices_now)
-        return {"ok": True}
-
-    @app.post("/api/journal/{op_id}/edit")
-    def journal_edit(op_id: int, body: EditIn, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
+    @app.post("/api/ops/{op_id}/edit")
+    def op_edit(op_id: int, body: EditIn, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
         background.add_task(fetch_prices_now)
         j = journal(conn, user)
-        current = j.current_op(op_id)
+        current = j.op(op_id)
         changes: dict[str, Any] = {}
         if body.date is not None and body.date != current.op_date:
             changes["op_date"] = body.date
@@ -513,8 +469,8 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
             raise ApiError("ничего не изменилось")
         return {"op_id": j.edit(op_id, **changes)}
 
-    @app.post("/api/journal/{op_id}/delete")
-    def journal_delete(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
+    @app.post("/api/ops/{op_id}/delete")
+    def op_delete(op_id: int, conn: Conn, user: User, background: BackgroundTasks) -> dict[str, Any]:
         op_id = journal(conn, user).delete(op_id)
         background.add_task(fetch_prices_now)
         return {"op_id": op_id}

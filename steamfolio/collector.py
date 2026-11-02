@@ -32,8 +32,9 @@ def targets(conn: sqlite3.Connection) -> list[Target]:
     for (portfolio_id,) in conn.execute("SELECT id FROM portfolios").fetchall():
         rows = conn.execute("SELECT * FROM operations WHERE portfolio_id = ?", (portfolio_id,)).fetchall()
         ledger = replay([Op.from_row(r) for r in rows])
+        orders = conn.execute("SELECT market_hash_name, currency FROM orders WHERE portfolio_id = ?", (portfolio_id,))
         for item, currency in [(p.key.market_hash_name, p.key.currency) for p in ledger.open_positions] + [
-            (o.market_hash_name, o.currency) for o in ledger.open_orders
+            (o["market_hash_name"], Currency(o["currency"])) for o in orders
         ]:
             needed.setdefault(item, set()).update((currency, Currency.USD))
     for (item,) in conn.execute("SELECT market_hash_name FROM tracked_items ORDER BY rowid").fetchall():

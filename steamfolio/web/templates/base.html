@@ -14,7 +14,6 @@
   <nav class="tabs">
     <a href="/portfolio" class="{{ 'active' if tab == 'portfolio' }}">Портфолио</a>
     <a href="/stats" class="{{ 'active' if tab == 'stats' }}">Статистика</a>
-    <a href="/journal" class="{{ 'active' if tab == 'journal' }}">Журнал операций</a>
   </nav>
   <div class="topbar-right">
     <span class="muted small" id="last-update"></span>
@@ -27,7 +26,7 @@
 {% block content %}{% endblock %}
 </main>
 <div id="toasts"></div>
-<script src="/static/app.js?v=41"></script>
+<script src="/static/app.js?v=42"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

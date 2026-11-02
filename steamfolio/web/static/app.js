@@ -495,37 +495,6 @@ const SF = (() => {
     });
   }
 
-  // Вопрос с несколькими ответами; null — закрыли без выбора.
-  function choiceDialog(title, html, choices) {
-    return new Promise((resolve) => {
-      const dlg = document.createElement("dialog");
-      dlg.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2>${html}
-        <div class="dialog-actions"><button value="">Отмена</button>${choices.map((c, i) =>
-          `<button value="${i}" class="${c.primary ? "primary" : ""}">${esc(c.label)}</button>`).join("")}</div></form>`;
-      document.body.append(dlg);
-      dlg.addEventListener("close", () => {
-        dlg.remove();
-        resolve(dlg.returnValue === "" ? null : choices[+dlg.returnValue].value);
-      });
-      dlg.showModal();
-    });
-  }
-
-  async function download(url, body, fallbackName) {
-    const res = await fetch(url, { method: "POST", credentials: "same-origin",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (res.status === 401) { location.href = "/login"; return; }
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Ошибка ${res.status}`);
-    const name = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(await res.blob());
-    link.download = name ? name[1] : fallbackName;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-  }
-
   // Подсказки предметов с иконками.
   function itemSuggest(wrap, onPick) {
     const input = wrap.querySelector("input");
@@ -767,7 +736,7 @@ const SF = (() => {
 
     // ---------- правка покупок из портфеля (двойной щелчок) ----------
     // Строка из одной покупки правится прямо в ячейке; из нескольких — сначала выбирается покупка.
-    // Любая правка — это «покупка изменена» в журнале: средняя, прибыль и графики пересчитываются, правку можно откатить.
+    // Правка меняет саму покупку: средняя, прибыль и графики пересчитываются.
 
     function bindEdit(td, r, field) {
       td.classList.add("editable");
@@ -792,8 +761,8 @@ const SF = (() => {
     }
 
     async function saveEdit(b, changes) {
-      await api("POST", `/api/journal/${b.op_id}/edit`, changes);
-      toast("Покупка изменена — запись в журнале");
+      await api("POST", `/api/ops/${b.op_id}/edit`, changes);
+      toast("Покупка изменена");
       await reload();
     }
 
@@ -844,7 +813,7 @@ const SF = (() => {
         submit: "Далее",
         layout: [{ name: "op", label: `Строка собрана из ${r.buys.length} покупок`, type: "select",
           options: r.buys.map((b) => ({ value: b.op_id,
-            label: `${date(b.date)} · ${num(b.quantity, 0)} шт. по ${money(b.price, b.currency)} · ${b.account}${b.kind === "order_filled" ? " · по ордеру" : ""}` })) }],
+            label: `${date(b.date)} · ${num(b.quantity, 0)} шт. по ${money(b.price, b.currency)} · ${b.account}` })) }],
         onSubmit: async (v) => {
           // Форма правки открывается после закрытия этой.
           setTimeout(() => editBuyForm(r.buys.find((b) => b.op_id === +v.op), field), 0);
@@ -853,7 +822,6 @@ const SF = (() => {
     }
 
     function editBuyForm(b, focus) {
-      const fill = b.kind === "order_filled";
       const layout = [
         [{ name: "date", label: "Дата покупки", type: "date", value: b.date, attrs: `max="${today()}"` },
           { name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: b.quantity }],
@@ -863,8 +831,8 @@ const SF = (() => {
           { name: "account_id", label: "Аккаунт", type: "select",
             options: accountChoices(b).map((a) => ({ value: a.id, label: a.name })), value: b.account_id }],
       ];
-      layout.push({ name: "_note", type: "static", label: "", required: false, html: `<span class="muted small">Покупка #${b.op_id} от ${date(b.date)}.
-        ${fill ? "Куплено по ордеру — правка меняет только портфель, ордер не затрагивает. " : ""}Изменение запишется в журнал как «покупка изменена» — его можно откатить.</span>` });
+      layout.push({ name: "_note", type: "static", label: "", required: false,
+        html: `<span class="muted small">Покупка от ${date(b.date)}. Изменение сразу меняет саму покупку — отменить его можно только обратной правкой.</span>` });
       const ctx = openForm({
         title: "Изменить покупку",
         layout,
@@ -1082,44 +1050,16 @@ const SF = (() => {
           на аккаунт <b>${esc(r.account)}</b> в валюте <b>${esc(r.currency)}</b> по средней цене ${money(r.avg_price, r.currency, true)}.</p>
           <p>Продажа от ${date(r.sale_date)} по ${money(r.sale_price, r.currency)} будет удалена, прибыль по ней
           (${r.profit > 0 ? "+" : ""}${money(r.profit, r.currency)}) исчезнет из статистики.<br>
-          <span class="muted small">В журнал запишется операция «продажа удалена» — её можно откатить.</span></p></div>` }],
+          <span class="muted small">Продажа удаляется насовсем — вернуть её можно, только внеся заново.</span></p></div>` }],
         onSubmit: async () => {
-          await api("POST", `/api/journal/${r.op_id}/delete`);
+          await api("POST", `/api/ops/${r.op_id}/delete`);
           toast(`Продажа удалена, ${r.item} — снова в портфолио`);
           await reload();
         },
       });
     }
 
-    // Выгрузка в Excel: портфель всегда по аккаунтам; фильтры таблицы — по выбору пользователя.
-    async function exportExcel(btn) {
-      const cols = columns();
-      const active = cols.filter((c) => c.filter && filterSet(filters[c.id]));
-      let body = {};
-      if (active.length) {
-        const list = active.map((c) => `<li>${esc(c.title)}: <b>${esc(filterText(filters[c.id]))}</b></li>`).join("");
-        const useFilters = await choiceDialog("Выгрузка в Excel", `<p>Учитывать выставленные фильтры?</p><ul>${list}</ul>
-          <p class="muted small">Фильтры применяются к листам «Портфель» и «Закрытые позиции». Ордера и журнал выгружаются полностью.</p>`,
-          [{ label: "Нет, выгрузить всё", value: false }, { label: "Да, с фильтрами", value: true, primary: true }]);
-        if (useFilters === null) return;
-        if (useFilters) {
-          // У открытых строк и продаж свои колонки — каждый лист фильтруется по своим.
-          const passFor = (list) => (r) => list.filter((c) => c.filter && filterSet(filters[c.id])).every((c) => matches(filters[c.id], c, r));
-          const [open, shut] = await Promise.all([api("GET", "/api/portfolio?closed=false"), api("GET", "/api/portfolio?closed=true")]);
-          body = {
-            open: open.rows.filter(passFor(openColumns())).map((r) => [r.item, r.account_id, r.currency]),
-            closed: shut.rows.filter(passFor(closedColumns())).map((r) => r.op_id),
-          };
-        }
-      }
-      btn.disabled = true;
-      try {
-        await download("/api/export", body, "portfolio.xlsx");
-      } catch (e) { toast(e.message, true); } finally { btn.disabled = false; }
-    }
-
     collapse.addEventListener("change", () => { store.set("collapse", collapse.checked ? "1" : "0"); reload(); });
-    document.getElementById("btn-excel").onclick = (e) => exportExcel(e.currentTarget);
     document.getElementById("btn-buy").onclick = () => requireAccounts(buyForm);
     // «Список аккаунтов» — один на всю страницу: после правок обновляются и портфель, и ордера.
     document.getElementById("btn-accounts").onclick = () => accountsDialog(() => Promise.all([reload(), orders.reload()]));
@@ -1173,7 +1113,7 @@ const SF = (() => {
         })[b.dataset.a]()) },
     ];
 
-    // Правка ордера двойным щелчком по ячейке — как в портфеле. Это перевыставление: «ордер изменён» в журнале.
+    // Правка ордера двойным щелчком по ячейке — как в портфеле (перевыставление).
     function bindOrderEdit(td, r, field) {
       td.classList.add("editable");
       td.title = td.title || "Двойной щелчок — изменить";
@@ -1208,7 +1148,7 @@ const SF = (() => {
         body[field] = field === "quantity" || field === "account_id" ? +value : value;
         try {
           await api("POST", `/api/orders/${r.order_id}/change`, body);
-          toast("Ордер перевыставлен — запись в журнале");
+          toast("Ордер перевыставлен");
           await reload();
         } catch (e) {
           toast(e.message + (e.violations && e.violations.length ? ": " + e.violations.join("; ") : ""), true);
@@ -1270,6 +1210,8 @@ const SF = (() => {
           { name: "price", label: `Цена за штуку, ${r.currency} (если фактическая отличалась)`, inputmode: "decimal", value: String(r.price).replace(".", ","),
             attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' },
           fxField,
+          ...(r.comment ? [{ name: "_note", type: "static", label: "", required: false,
+            html: `<span class="muted small">Комментарий ордера «${esc(r.comment)}» допишется в комментарий строки в портфеле.</span>` }] : []),
         ],
         onInput: (ctx) => {
           ctx.fx = ctx.fx || fxBlock(ctx, {
@@ -1294,7 +1236,7 @@ const SF = (() => {
     }
 
     async function removeOrder(r) {
-      const ok = await confirmDialog("Убрать ордер?", `${r.item}: ${r.quantity} шт. по ${money(r.price, r.currency)}. Операция попадёт в журнал, её можно будет откатить.`, "Убрать");
+      const ok = await confirmDialog("Убрать ордер?", `${r.item}: ${r.quantity} шт. по ${money(r.price, r.currency)}. Ордер удаляется насовсем.`, "Убрать");
       if (!ok) return;
       try {
         await api("POST", `/api/orders/${r.order_id}/remove`);
@@ -1305,195 +1247,6 @@ const SF = (() => {
 
     document.getElementById(ids.btnOrder).onclick = () => requireAccounts(orderForm);
     return { reload: () => reload().catch((e) => toast(e.message, true)) };
-  }
-
-  // ---------- «Журнал операций» ----------
-
-  function journalPage() {
-    const FX_SHORT = { steam: "Steam", cbr: "ЦБ", manual: "вручную", usd: "", transfer: "перенос" };
-    const mskDate = (ts) => new Date(ts).toLocaleDateString("sv-SE", { timeZone: "Europe/Moscow" });
-    const opLink = (id) => `<a class="oplink" data-op="${id}">#${id}</a>`;
-    const el = (id) => document.getElementById(id);
-    let rows = [];
-    let accountsById = {};
-
-    function notes(r) {
-      const out = [];
-      if (r.target_id) out.push(`к операции ${opLink(r.target_id)} (${esc(r.target_kind || "")})`);
-      if (r.order_id && r.kind !== "order_placed") out.push(`ордер ${opLink(r.order_id)}`);
-      if (r.edited_by.length) out.push(`изменена: ${r.edited_by.map(opLink).join(", ")}`);
-      if (r.deleted_by.length) out.push(`удалена: ${r.deleted_by.map(opLink).join(", ")}`);
-      const last = r.history[r.history.length - 1];
-      if (r.cancelled && last) out.push(`отменена ${esc(dateTime(last.at))}`);
-      return out.map((n) => `<span class="note">${n}</span>`).join("");
-    }
-
-    function historyTitle(r) {
-      return r.history.map((h) => `${h.action === "cancel" ? "откат" : "возврат"}: ${dateTime(h.at)}`).join("\n");
-    }
-
-    const columns = [
-      { id: "id", title: "№", key: "id", numeric: true, filter: true, cls: "num", html: (r) => `#${r.id}` },
-      { id: "op_date", title: "Дата операции", key: "op_date", filter: true, text: (r) => date(r.op_date), html: (r) => date(r.op_date) },
-      { id: "created_at", title: "Действие в системе", key: "created_at", filter: true, text: (r) => dateTime(r.created_at),
-        html: (r) => `<span class="small" title="${esc(historyTitle(r))}">${esc(dateTime(r.created_at))}</span>` },
-      { id: "kind", title: "Тип", key: "kind_name", filter: true, cls: "kind", html: (r) => esc(r.kind_name) + notes(r) },
-      { id: "item", title: "Предмет", key: "item", filter: true, cls: "name",
-        html: (r) => `${esc(r.item || "")}${r.changes.length ? `<span class="changes">${r.changes.map((c) =>
-          `${esc(c.field)}: ${esc(c.before)} → <b>${esc(c.after)}</b>`).join("<br>")}</span>` : ""}` },
-      { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
-      { id: "price", title: "Цена", key: "price", cls: "num", numeric: true, filter: true, html: (r) => r.price == null ? "—" : money(r.price, r.currency) },
-      { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency || "" },
-      { id: "fx", title: "Курс к USD", key: "fx_rate", cls: "num", numeric: true, filter: true,
-        html: (r) => r.fx_rate == null ? '<span class="muted">—</span>'
-          : `${num(r.fx_rate, 4)}<span class="note">${FX_SHORT[r.fx_source] || ""}</span>` },
-      { id: "sum_usd", title: "Сумма, $", key: "sum_usd", cls: "num", numeric: true, filter: true, html: (r) => money(r.sum_usd, "USD") },
-      { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames,
-        values: (r) => [r.account, r.to_account].filter(Boolean),
-        html: (r) => esc(r.account) + (r.to_account ? ` → ${esc(r.to_account)}` : "") },
-      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
-      { id: "actions", title: "", cls: "actions", sortable: false,
-        html: (r) => (r.cancelled ? '<button class="small" data-a="restore">Вернуть</button>' : '<button class="small" data-a="cancel">Откатить</button>')
-          + (r.can_edit ? '<button class="small" data-a="edit">Изменить</button><button class="small" data-a="delete">Удалить</button>' : ""),
-        bind: (td, r) => td.querySelectorAll("button").forEach((b) => b.onclick = () => ({
-          cancel: () => toggle(r, "cancel"), restore: () => toggle(r, "restore"), edit: () => editForm(r), delete: () => deleteForm(r),
-        })[b.dataset.a]()) },
-    ];
-
-    const table = makeTable(el("table"), columns, {
-      storageKey: "journal",
-      empty: "Операций пока нет",
-      defaultSort: { id: "id", dir: -1 },
-      rowId: (r) => r.id,
-      rowClass: (r) => r.cancelled ? "cancelled" : "",
-      extraFilter: (r) => {
-        if (el("f-kind").value && r.kind_name !== el("f-kind").value) return false;
-        if (el("f-hide-cancelled").checked && r.cancelled) return false;
-        const d = el("f-basis").value === "op_date" ? r.op_date : mskDate(r.created_at);
-        if (el("f-from").value && d < el("f-from").value) return false;
-        if (el("f-to").value && d > el("f-to").value) return false;
-        return true;
-      },
-    });
-    ["f-kind", "f-from", "f-to", "f-basis", "f-hide-cancelled"].forEach((id) => el(id).addEventListener("change", table.render));
-    el("f-reset").onclick = () => {
-      el("f-kind").value = el("f-from").value = el("f-to").value = "";
-      el("f-hide-cancelled").checked = false;
-      table.clearFilters();
-    };
-
-    // Переход к операции по ссылке #N: если её скрывают фильтры — сбрасываем их.
-    function goTo(id) {
-      let tr = document.querySelector(`tr[data-row="${id}"]`);
-      if (!tr) { el("f-reset").click(); tr = document.querySelector(`tr[data-row="${id}"]`); }
-      if (!tr) return;
-      tr.scrollIntoView({ block: "center", behavior: "smooth" });
-      tr.classList.remove("flash");
-      void tr.offsetWidth;
-      tr.classList.add("flash");
-    }
-    document.addEventListener("click", (e) => {
-      const a = e.target.closest(".oplink");
-      if (!a) return;
-      e.preventDefault();
-      const dlg = a.closest("dialog");
-      if (dlg) dlg.close();
-      goTo(+a.dataset.op);
-    });
-
-    async function reload() {
-      const data = await api("GET", "/api/journal");
-      rows = data.rows;
-      accountsById = data.accounts;
-      const kinds = [...new Set(rows.map((r) => r.kind_name))].sort((a, b) => a.localeCompare(b, "ru"));
-      const keep = el("f-kind").value;
-      el("f-kind").innerHTML = '<option value="">все</option>' + kinds.map((k) => `<option ${k === keep ? "selected" : ""}>${esc(k)}</option>`).join("");
-      table.setRows(rows);
-    }
-
-    const linkify = (text) => esc(text).replace(/#(\d+)/g, (_, id) => opLink(id));
-
-    function previewHtml(p) {
-      const items = [];
-      p.positions.forEach((c) => items.push(`${esc(c.item)} · ${esc(c.account)} · ${c.currency}: количество <b>${num(c.quantity_before, 0)} → ${num(c.quantity_after, 0)}</b>, средняя ${money(c.avg_before, c.currency, true)} → ${money(c.avg_after, c.currency, true)}`));
-      p.sales.forEach((s) => {
-        if (s.profit_after == null) items.push(`Продажа ${opLink(s.op_id)} (${esc(s.item)}) уйдёт из статистики: прибыль ${money(s.profit_before, s.currency)} (${money(s.profit_usd_before, "USD")})`);
-        else if (s.profit_before == null) items.push(`Продажа ${opLink(s.op_id)} (${esc(s.item)}) вернётся в статистику: прибыль ${money(s.profit_after, s.currency)} (${money(s.profit_usd_after, "USD")})`);
-        else items.push(`Продажа ${opLink(s.op_id)} (${esc(s.item)}): прибыль <b>${money(s.profit_before, s.currency)} → ${money(s.profit_after, s.currency)}</b> (${money(s.profit_usd_before, "USD")} → ${money(s.profit_usd_after, "USD")})`);
-      });
-      return items.length ? `<ul class="preview-list">${items.map((i) => `<li>${i}</li>`).join("")}</ul>`
-        : '<p class="muted">Остатки в портфеле и прибыль не изменятся.</p>';
-    }
-
-    async function toggle(r, action) {
-      let p;
-      try { p = await api("GET", `/api/journal/${r.id}/preview?action=${action}`); } catch (e) { toast(e.message, true); return; }
-      const verb = action === "cancel" ? "Откатить" : "Вернуть";
-      const html = p.allowed ? previewHtml(p)
-        : `<div class="error">${action === "cancel" ? "Откат" : "Возврат"} невозможен — сначала откатите:<ul>${p.violations.map((v) => `<li>${linkify(v)}</li>`).join("")}</ul></div>`;
-      const ctx = openForm({
-        title: `${verb} операцию #${r.id}: ${r.kind_name}${r.item ? " · " + r.item : ""}`,
-        submit: p.allowed ? verb : "Понятно",
-        layout: [{ name: "_", type: "static", label: p.allowed ? "Что изменится" : "", required: false, html }],
-        onSubmit: async () => {
-          if (!p.allowed) return;
-          await api("POST", `/api/journal/${r.id}/${action}`);
-          toast(action === "cancel" ? `Операция #${r.id} откачена` : `Операция #${r.id} возвращена`);
-          await reload();
-        },
-      });
-      if (!p.allowed) ctx.dlg.querySelector("[data-cancel]").classList.add("hidden");
-    }
-
-    function editForm(r) {
-      const c = r.current;
-      // Исполнение ордера правится как обычная покупка — правка меняет только портфель, не ордер.
-      const accounts = Object.entries(accountsById).map(([id, name]) => ({ value: +id, label: name }));
-      const layout = [
-        { name: "item", label: "Предмет", type: "item", value: c.item },
-        [{ name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: c.quantity },
-          { name: "price", label: r.kind === "sell" ? "Чистая цена за штуку" : "Цена за штуку", inputmode: "decimal",
-            value: String(c.price).replace(".", ","), attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' }],
-        [{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: c.currency },
-          { name: "account_id", label: "Аккаунт", type: "select", options: accounts, value: c.account_id }],
-      ];
-      layout.push(
-        { name: "date", label: "Дата", type: "date", value: c.date, attrs: `max="${meta.today}"` },
-        { name: "fx_rate", label: "Курс к USD, если нужно задать вручную", required: false, inputmode: "decimal",
-          hint: c.currency === "USD" ? "" : `Сейчас: ${num(c.fx_rate, 4)} (${FX_SHORT[c.fx_source] || ""}). Пусто — при смене даты курс подберётся заново${c.fx_source === "manual" ? ", ручной курс сохранится" : ""}.` },
-        { name: "comment", label: "Комментарий", type: "textarea", required: false, value: c.comment },
-      );
-      openForm({
-        title: `Изменить операцию #${r.id} (${r.kind_name})`,
-        submit: "Сохранить изменение",
-        layout,
-        onSubmit: async (v) => {
-          await api("POST", `/api/journal/${r.id}/edit`, {
-            date: v.date, quantity: +v.quantity, price: v.price, comment: v.comment, fx_rate: v.fx_rate || null,
-            item: v.item, currency: v.currency, account_id: +v.account_id,
-          });
-          toast(`Изменение записано в журнал`);
-          await reload();
-        },
-      });
-    }
-
-    function deleteForm(r) {
-      openForm({
-        title: `Удалить операцию #${r.id} (${r.kind_name})?`,
-        submit: "Удалить",
-        layout: [{ name: "_", type: "static", label: "", required: false,
-          html: `<p>${esc(r.item)}: ${num(r.current.quantity, 0)} шт. по ${money(r.current.price, r.current.currency)}, ${date(r.current.date)}.</p>
-            <p class="muted small">Удаление запишется в журнал отдельной операцией — его можно будет откатить.</p>` }],
-        onSubmit: async () => {
-          await api("POST", `/api/journal/${r.id}/delete`);
-          toast(`Операция #${r.id} удалена`);
-          await reload();
-        },
-      });
-    }
-
-    loadMeta().then(reload).catch((e) => toast(e.message, true));
   }
 
   // ---------- «Статистика» ----------
@@ -1916,5 +1669,5 @@ const SF = (() => {
     loadMeta().then(load).catch((e) => toast(e.message, true));
   }
 
-  return { portfolioPage, ordersPage, journalPage, statsPage, settingsPage };
+  return { portfolioPage, ordersPage, statsPage, settingsPage };
 })();

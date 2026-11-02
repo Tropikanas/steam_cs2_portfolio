@@ -152,7 +152,11 @@ def test_sale_after_transfer_uses_carried_cost(journal, acc, acc2):
     assert sale.months == Decimal("3.0")  # срок — от первой покупки на исходном аккаунте
 
 
-def test_transfer_validation_and_rollback(journal, acc, acc2):
+def _arrival(journal, transfer_id):
+    return next(op for op in journal.ops() if op.kind == "buy" and op.target_id == transfer_id)
+
+
+def test_transfer_validation(journal, acc, acc2):
     journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
     with pytest.raises(JournalError, match="при остатке 5"):
         journal.transfer(CASE, acc, acc2, RUB, 6, D("2026-01-02"))
@@ -161,18 +165,8 @@ def test_transfer_validation_and_rollback(journal, acc, acc2):
     with pytest.raises(JournalError):
         journal.transfer(CASE, acc, 999, RUB, 1, D("2026-01-02"))
     moved = journal.transfer(CASE, acc, acc2, RUB, 5, D("2026-01-02"))
-    sale = journal.sell(CASE, acc2, RUB, 2, 1500, D("2026-01-03"))
-    with pytest.raises(JournalError, match=f"#{sale}"):  # перенесённое уже продано
-        journal.cancel(moved)
-    journal.cancel(sale)
-    journal.cancel(moved)
-    assert (pos(journal, acc).quantity, pos(journal, acc2).quantity) == (5, 0)
     with pytest.raises(JournalError, match="только покупки и продажи"):
         journal.edit(moved, quantity=1)
-
-
-def _arrival(journal, transfer_id):
-    return next(op for op in journal.ops() if op.kind == "buy" and op.target_id == transfer_id)
 
 
 def test_transferred_row_is_an_editable_buy(journal, fx, acc, acc2):
@@ -190,14 +184,16 @@ def test_transferred_row_is_an_editable_buy(journal, fx, acc, acc2):
     assert pos(journal, acc).quantity == 70
 
 
-def test_cancelling_either_half_cancels_transfer(journal, acc, acc2):
+def test_deleting_transferred_buy_returns_items(journal, acc, acc2):
     journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))
     moved = journal.transfer(CASE, acc, acc2, RUB, 4)
-    journal.cancel(_arrival(journal, moved).id)
+    sale = journal.sell(CASE, acc2, RUB, 2, 1500)
+    with pytest.raises(JournalError, match=f"#{sale}"):  # привезённое уже продано
+        journal.delete(_arrival(journal, moved).id)
+    journal.delete(sale)
+    journal.delete(_arrival(journal, moved).id)
     assert (pos(journal, acc).quantity, pos(journal, acc2).quantity) == (10, 0)
-    journal.restore(_arrival(journal, moved).id)
-    journal.cancel(moved)
-    assert (pos(journal, acc).quantity, pos(journal, acc2).quantity) == (10, 0)
+    assert [op.kind for op in journal.ops()] == ["buy"]  # перенос удалён вместе с покупкой
 
 
 def test_transfer_does_not_mix_with_earlier_history_of_target_row(journal, acc, acc2):
@@ -225,16 +221,17 @@ def test_transfer_not_counted_twice_on_chart(journal, acc, acc2):
 
 # ---------- ордера ----------
 
+def order_state(journal, order_id):
+    return next((o for o in journal.orders() if o.order_id == order_id), None)
+
+
 def test_order_partial_then_full_fill(journal, acc):
     order = journal.place_order(CASE, acc, RUB, 10, 5000)
     journal.fill_order(order, quantity=4)
-    ledger = journal.ledger()
-    assert ledger.orders[order].quantity == 6
+    assert order_state(journal, order).quantity == 6
     assert pos(journal, acc).quantity == 4
     journal.fill_order(order, price=4900)  # «Куплено всё», фактическая цена отличалась
-    ledger = journal.ledger()
-    assert ledger.orders[order].status == "filled"
-    assert ledger.open_orders == []
+    assert journal.orders() == []  # купленный ордер не хранится
     p = pos(journal, acc)
     assert p.quantity == 10
     assert p.avg_price == Decimal(4 * 5000 + 6 * 4900) / 10
@@ -242,15 +239,16 @@ def test_order_partial_then_full_fill(journal, acc):
 
 def test_order_fill_cannot_exceed_remaining(journal, acc):
     order = journal.place_order(CASE, acc, RUB, 2, 5000)
-    with pytest.raises(JournalError, match="больше остатка"):
+    with pytest.raises(JournalError, match="больше, чем в ордере"):
         journal.fill_order(order, quantity=3)
+    assert order_state(journal, order).quantity == 2 and journal.ops() == []
 
 
 def test_order_change_account_and_currency(journal, acc, acc2):
-    # Перевыставление на другой аккаунт и в другой валюте: исполнение идёт уже туда.
+    # Перевыставление на другой аккаунт и в другой валюте: покупка идёт уже туда.
     order = journal.place_order(CASE, acc, RUB, 10, 5000)
     journal.change_order(order, price=70, quantity=10, account_id=acc2, currency=USD)
-    o = journal.ledger().orders[order]
+    o = order_state(journal, order)
     assert (o.account_id, o.currency, o.price) == (acc2, USD, 70)
     journal.fill_order(order)
     assert pos(journal, acc2, USD).quantity == 10 and pos(journal, acc).quantity == 0
@@ -258,16 +256,13 @@ def test_order_change_account_and_currency(journal, acc, acc2):
 
 def test_order_change_and_remove(journal, acc):
     order = journal.place_order(CASE, acc, RUB, 10, 5000, comment="старт")
-    change = journal.change_order(order, price=5500, quantity=8, comment="перебили")
-    o = journal.ledger().orders[order]
+    journal.change_order(order, price=5500, quantity=8, comment="перебили")
+    o = order_state(journal, order)
     assert (o.price, o.quantity, o.comment) == (5500, 8, "перебили")
-    journal.cancel(change)
-    o = journal.ledger().orders[order]
-    assert (o.price, o.quantity, o.comment) == (5000, 10, "старт")
-    removed = journal.remove_order(order)
-    assert journal.ledger().open_orders == []
-    journal.cancel(removed)  # убранный ордер возвращается
-    assert [o.order_id for o in journal.ledger().open_orders] == [order]
+    journal.remove_order(order)
+    assert journal.orders() == []
+    with pytest.raises(JournalError, match="не найден"):
+        journal.fill_order(order)
 
 
 def test_orders_are_not_in_statistics(journal, acc):
@@ -277,81 +272,42 @@ def test_orders_are_not_in_statistics(journal, acc):
     assert ledger.positions == {}
 
 
-# ---------- откат ----------
-
-def test_rollback_fill_returns_quantity_to_order(journal, acc):
-    order = journal.place_order(CASE, acc, RUB, 10, 5000)
-    fill = journal.fill_order(order, quantity=10)
-    journal.cancel(fill)
-    ledger = journal.ledger()
-    assert ledger.orders[order].quantity == 10
-    assert ledger.orders[order].status == "open"
-    assert pos(journal, acc).quantity == 0
-
-
-def test_editing_fill_changes_only_portfolio_not_order(journal, acc, acc2):
-    # Покупка по ордеру после переноса в портфель правится свободно: валюта, аккаунт, количество.
+def test_editing_fill_does_not_touch_order(journal, acc, acc2):
     order = journal.place_order(CASE, acc, RUB, 10, 5000)
     fill = journal.fill_order(order, quantity=4)
     journal.edit(fill, account_id=acc2, currency=USD, quantity=7, price=60)
-    ledger = journal.ledger()
-    assert ledger.orders[order].quantity == 6 and ledger.orders[order].status == "open"  # ордер как был
+    assert order_state(journal, order).quantity == 6  # ордер как был
     assert pos(journal, acc2, USD).quantity == 7 and pos(journal, acc).quantity == 0
-    # ордер по-прежнему можно исполнить на весь остаток
-    journal.fill_order(order)
-    assert journal.ledger().orders[order].status == "filled"
 
 
-def test_rollback_buy_blocked_by_sale_and_names_it(journal, acc):
-    buy = journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
-    sale = journal.sell(CASE, acc, RUB, 3, 2000, D("2026-01-05"))
-    preview = journal.preview_cancel(buy)
-    assert not preview.allowed
-    assert f"#{sale}" in preview.violations[0]
-    with pytest.raises(JournalError, match=f"#{sale}"):
-        journal.cancel(buy)
-    journal.cancel(sale)
-    journal.cancel(buy)
-    assert pos(journal, acc).quantity == 0
-    # отмену можно вернуть — в обратном порядке
-    with pytest.raises(JournalError):
-        journal.restore(sale)
-    journal.restore(buy)
-    journal.restore(sale)
-    assert pos(journal, acc).quantity == 2
+def row_comment(conn, item, account_id, currency=RUB):
+    row = conn.execute("SELECT comment FROM position_comments WHERE market_hash_name = ? AND account_id = ? AND currency = ?",
+                       (item, account_id, int(currency))).fetchone()
+    return row["comment"] if row else None
 
 
-def test_rollback_order_placement_blocked_by_fill(journal, acc):
-    order = journal.place_order(CASE, acc, RUB, 10, 5000)
-    fill = journal.fill_order(order, quantity=2)
-    with pytest.raises(JournalError, match=f"#{fill}"):
-        journal.cancel(order)
-
-
-def test_preview_shows_quantity_average_and_profit_changes(journal, acc):
-    journal.buy(CASE, acc, RUB, 1, 10000, D("2026-01-01"))
-    second = journal.buy(CASE, acc, RUB, 1, 30000, D("2026-01-02"))
-    sale = journal.sell(CASE, acc, RUB, 1, 40000, D("2026-01-03"))
-    preview = journal.preview_cancel(second)
-    assert preview.allowed
-    [change] = preview.positions
-    assert (change.quantity_before, change.quantity_after) == (1, 0)
-    assert (change.avg_before, change.avg_after) == (20000, None)
-    [sale_change] = preview.sales
-    assert sale_change.op_id == sale
-    assert (sale_change.profit_before, sale_change.profit_after) == (20000, 30000)
+def test_order_comment_goes_to_portfolio_row(conn, journal, acc):
+    # Комментарий ордера переходит в строку портфеля; при следующих покупках по ордерам — через «; ».
+    first = journal.place_order(CASE, acc, RUB, 10, 5000, comment="под мажор")
+    journal.fill_order(first, quantity=4)
+    assert row_comment(conn, CASE, acc) == "под мажор"
+    journal.fill_order(first)  # тот же комментарий второй раз не дописывается
+    assert row_comment(conn, CASE, acc) == "под мажор"
+    second = journal.place_order(CASE, acc, RUB, 5, 4000, comment="докупка на просадке")
+    journal.fill_order(second, quantity=5)
+    assert row_comment(conn, CASE, acc) == "под мажор; докупка на просадке"
+    quiet = journal.place_order(CASE, acc, RUB, 1, 4000)
+    journal.fill_order(quiet)  # без комментария — строка не меняется
+    assert row_comment(conn, CASE, acc) == "под мажор; докупка на просадке"
 
 
 # ---------- изменение и удаление ----------
 
-def test_edit_buy_records_before_after_and_can_be_rolled_back(journal, acc):
+def test_edit_changes_record_in_place(journal, acc):
     buy = journal.buy(CASE, acc, RUB, 2, 10000, D("2026-01-01"))
-    edit = journal.edit(buy, price=12000)
+    journal.edit(buy, price=12000)
     assert pos(journal, acc).avg_price == 12000
-    payload = journal.op(edit).payload
-    assert (payload["before"]["price"], payload["after"]["price"]) == (10000, 12000)
-    journal.cancel(edit)
-    assert pos(journal, acc).avg_price == 10000
+    assert [(op.id, op.price) for op in journal.ops()] == [(buy, 12000)]  # та же запись, без истории правок
 
 
 def test_edit_date_refreshes_rate(journal, fx, acc):
@@ -361,32 +317,24 @@ def test_edit_date_refreshes_rate(journal, fx, acc):
     assert pos(journal, acc).cost_usd == 100
 
 
-def test_successive_edits_last_one_wins(journal, acc):
-    buy = journal.buy(CASE, acc, RUB, 1, 10000, D("2026-01-01"))
-    journal.edit(buy, price=11000)
-    second = journal.edit(buy, quantity=3)
-    p = pos(journal, acc)
-    assert (p.quantity, p.avg_price) == (3, 11000)
-    journal.cancel(second)
-    p = pos(journal, acc)
-    assert (p.quantity, p.avg_price) == (1, 11000)
-
-
 def test_edit_that_breaks_later_sale_is_rejected(journal, acc):
     buy = journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
-    journal.sell(CASE, acc, RUB, 4, 2000, D("2026-01-02"))
-    with pytest.raises(JournalError, match="при остатке 3"):
+    sale = journal.sell(CASE, acc, RUB, 4, 2000, D("2026-01-02"))
+    with pytest.raises(JournalError, match=f"#{sale}"):
         journal.edit(buy, quantity=3)
+    assert journal.op(buy).quantity == 5
 
 
-def test_delete_and_restore(journal, acc):
-    buy = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-01"))
-    deletion = journal.delete(buy)
-    assert pos(journal, acc).quantity == 0
-    with pytest.raises(JournalError, match="удалена"):
+def test_delete_buy_blocked_by_sale(journal, acc):
+    buy = journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
+    sale = journal.sell(CASE, acc, RUB, 3, 2000, D("2026-01-05"))
+    with pytest.raises(JournalError, match=f"#{sale}"):
+        journal.delete(buy)
+    journal.delete(sale)
+    journal.delete(buy)
+    assert journal.ops() == [] and pos(journal, acc).quantity == 0
+    with pytest.raises(JournalError, match="не найдена"):
         journal.edit(buy, price=5)
-    journal.cancel(deletion)
-    assert pos(journal, acc).quantity == 1
 
 
 def test_edit_sale(journal, acc):
@@ -396,10 +344,3 @@ def test_edit_sale(journal, acc):
     assert journal.ledger().sales[0].profit == 2000
 
 
-def test_edit_fill_any_field_order_stays_filled(journal, acc, acc2):
-    order = journal.place_order(CASE, acc, RUB, 5, 1000)
-    fill = journal.fill_order(order, quantity=5)
-    journal.edit(fill, account_id=acc2)
-    journal.edit(fill, price=900, quantity=3)
-    assert pos(journal, acc2).avg_price == 900 and pos(journal, acc2).quantity == 3
-    assert journal.ledger().orders[order].status == "filled"  # исполнен на 5, как и был

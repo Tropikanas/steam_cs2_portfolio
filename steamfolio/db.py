@@ -330,6 +330,22 @@ MIGRATIONS: list[str] = [
     ALTER TABLE operations_new RENAME TO operations;
     CREATE INDEX operations_portfolio ON operations(portfolio_id, op_date);
     """,
+    # 8: ордера — отдельные записи, только выставленные. Журнал операций заменён записями покупок, продаж
+    # и переносов, которые правятся и удаляются на месте (старые данные перевёл отдельный скрипт; он же мог уже
+    # создать эту таблицу — отсюда IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS orders (
+        id               INTEGER PRIMARY KEY,
+        portfolio_id     INTEGER NOT NULL REFERENCES portfolios(id),
+        market_hash_name TEXT NOT NULL,
+        account_id       INTEGER NOT NULL REFERENCES accounts(id),
+        currency         INTEGER NOT NULL,
+        quantity         INTEGER NOT NULL CHECK (quantity > 0),
+        price            INTEGER NOT NULL CHECK (price >= 0),
+        comment          TEXT NOT NULL DEFAULT '',
+        created_at       TEXT NOT NULL
+    );
+    """,
 ]
 
 

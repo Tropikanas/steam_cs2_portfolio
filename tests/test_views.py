@@ -114,7 +114,7 @@ def test_closed_positions_are_sales(conn, journal, acc):
 def test_orders_view_outbid_and_reserved(conn, journal, acc):
     snapshot(conn, CASE, RUB, 1100, NOW - timedelta(hours=1), rate=80.0)
     journal.place_order(CASE, acc, RUB, 10, 1000)
-    data = views.orders(conn, journal.ledger())
+    data = views.orders(conn, journal.orders())
     [row] = data["rows"]
     assert row["outbid"] is True
     assert row["total"] == 100.0

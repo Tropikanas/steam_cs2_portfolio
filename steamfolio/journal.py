@@ -1,8 +1,8 @@
-"""Журнал операций: запись, изменение, откат — с проверкой через полный пересчёт.
+"""Записи портфеля: покупки, продажи, переносы и выставленные ордера.
 
-Любое действие сначала применяется к копии журнала в памяти. Если пересчёт находит
-нарушения (продажа больше остатка, исполнение убранного ордера и т. п.), действие
-отклоняется с перечнем операций, которые мешают.
+Записи правятся и удаляются на месте — истории правок и отката нет, ошибку исправляют вручную.
+Любое изменение сначала проверяется полным пересчётом в памяти: если он находит нарушения
+(продажа больше остатка и т. п.), изменение отклоняется с перечнем записей, которые мешают.
 """
 
 from __future__ import annotations
@@ -17,7 +17,9 @@ from steamfolio.clock import today_msk
 from steamfolio.currencies import USER_CURRENCIES, Currency
 from steamfolio.db import utcnow
 from steamfolio.fx import FxResolver
-from steamfolio.ledger import EDITABLE_FIELDS, Ledger, Op, OrderState, RowKey, effective_ops, replay
+from steamfolio.ledger import (
+    EDITABLE_FIELDS, Ledger, Op, RowKey, is_transfer_buy, removal_matches, replay,
+)
 
 # Временный id ещё не записанной операции: больше любого настоящего.
 PENDING_ID = 10**15
@@ -25,20 +27,13 @@ PENDING_ID = 10**15
 KIND_NAMES = {
     "buy": "покупка",
     "sell": "продажа",
-    "order_placed": "ордер выставлен",
-    "order_changed": "ордер изменён",
-    "order_filled": "ордер исполнен",
-    "order_removed": "ордер убран",
-    "buy_edited": "покупка изменена",
-    "buy_deleted": "покупка удалена",
-    "sell_edited": "продажа изменена",
-    "sell_deleted": "продажа удалена",
     "transfer": "перенос на аккаунт",
     "position_removed": "позиция удалена",
 }
 
+
 class JournalError(Exception):
-    """Действие отклонено. violations — что мешает, по одной строке на операцию."""
+    """Действие отклонено. violations — что мешает, по одной строке на запись."""
 
     def __init__(self, message: str, violations: list[str] | None = None):
         super().__init__(message if not violations else message + ":\n" + "\n".join(violations))
@@ -46,34 +41,26 @@ class JournalError(Exception):
 
 
 @dataclass(frozen=True)
-class PositionChange:
-    key: RowKey
-    quantity_before: int
-    quantity_after: int
-    avg_before: Decimal | None
-    avg_after: Decimal | None
+class Order:
+    """Выставленный ордер на покупку (исполненные и убранные не хранятся)."""
 
-
-@dataclass(frozen=True)
-class SaleChange:
-    op_id: int
-    profit_before: Decimal | None  # None — продажи не было
-    profit_after: Decimal | None  # None — продажи не станет
-    profit_usd_before: Decimal | None
-    profit_usd_after: Decimal | None
-
-
-@dataclass(frozen=True)
-class Preview:
-    """Что изменится после отката или его отмены."""
-
-    positions: list[PositionChange]
-    sales: list[SaleChange]
-    violations: list[str]
+    order_id: int
+    market_hash_name: str
+    account_id: int
+    currency: Currency
+    price: int
+    quantity: int  # сколько ещё не куплено
+    comment: str
+    created_at: str
 
     @property
-    def allowed(self) -> bool:
-        return not self.violations
+    def total(self) -> int:
+        return self.price * self.quantity
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Order:
+        return cls(row["id"], row["market_hash_name"], row["account_id"], Currency(row["currency"]), row["price"],
+                   row["quantity"], row["comment"], row["created_at"])
 
 
 class Journal:
@@ -97,8 +84,12 @@ class Journal:
             "SELECT * FROM operations WHERE id = ? AND portfolio_id = ?", (op_id, self.portfolio_id)
         ).fetchone()
         if row is None:
-            raise JournalError(f"операция #{op_id} не найдена")
+            raise JournalError(f"запись #{op_id} не найдена")
         return Op.from_row(row)
+
+    def orders(self) -> list[Order]:
+        rows = self.conn.execute("SELECT * FROM orders WHERE portfolio_id = ? ORDER BY id", (self.portfolio_id,))
+        return [Order.from_row(r) for r in rows]
 
     # ---------- покупки и продажи ----------
 
@@ -129,7 +120,7 @@ class Journal:
     ) -> int:
         """Перенести часть строки на другой аккаунт: списание с исходного аккаунта по средней цене и обычная
         покупка на новом — по той же средней цене, датой первой покупки исходной строки и с тем же курсом к USD.
-        Новую строку можно править как любую купленную; откат переноса или покупки отменяет обе половины."""
+        Новую строку можно править как любую купленную; удаление этой покупки отменяет перенос целиком."""
         op_date = op_date or today_msk()
         self._check_trade(item, from_account_id, currency, quantity, 0, op_date)
         self._check_account(to_account_id)
@@ -150,20 +141,36 @@ class Journal:
                      rate, source, target_id=PENDING_ID, comment=comment)
         return self._add_pair(out, arrival)
 
-    def remove_position(self, item: str, account_id: int, currency: Currency, comment: str = "") -> int:
-        """Удалить весь текущий остаток строки как ошибочно внесённый: «Вложено» и «Всего вложено» уменьшаются."""
-        today = today_msk()
+    def remove_position(self, item: str, account_id: int, currency: Currency) -> int:
+        """Стереть весь текущий остаток строки как ошибочно внесённый: будто его не покупали.
+
+        Снимаются последние пришедшие в строку штуки — покупки уменьшаются или удаляются; пришедшие
+        переносом снимаются и с исходного аккаунта. Возвращает, сколько штук стёрто."""
         pos = self.ledger().positions.get(RowKey(item, account_id, currency))
         if pos is None or pos.quantity == 0:
             raise JournalError(f"позиции «{item}» в {currency.name} на этом аккаунте нет")
-        self._check_trade(item, account_id, currency, pos.quantity, 0, today)
-        return self._add(Op(PENDING_ID, "position_removed", today, utcnow(), item, account_id, currency, pos.quantity,
-                            comment=comment))
+        ops = self.ops()
+        request = Op(PENDING_ID, "position_removed", today_msk(), utcnow(), item, account_id, currency, pos.quantity)
+        _, taken, matched = removal_matches(ops + [request])
+        if PENDING_ID not in matched:
+            raise JournalError(f"не удалось найти покупки, из которых сложилась строка «{item}»")
+        after = [replace(op, quantity=op.quantity - taken.get(op.id, 0)) for op in ops
+                 if taken.get(op.id, 0) < op.quantity]
+        self._check(ops, after, "позиция не удалена")
+        by_id = {op.id: op for op in ops}
+        with self.conn:
+            # Покупки — раньше переносов: привезённая покупка ссылается на свой перенос.
+            for op_id, count in sorted(taken.items(), key=lambda kv: by_id[kv[0]].kind != "buy"):
+                quantity = by_id[op_id].quantity
+                if count >= quantity:
+                    self.conn.execute("DELETE FROM operations WHERE id = ?", (op_id,))
+                else:
+                    self.conn.execute("UPDATE operations SET quantity = ? WHERE id = ?", (quantity - count, op_id))
+        return pos.quantity
 
     def edit(self, op_id: int, **changes) -> int:
-        """Изменить покупку, продажу или исполнение ордера. Пишется отдельной операцией «было → стало».
-        Исполнение ордера правится как обычная покупка: на сам ордер правка не влияет."""
-        target = self.current_op(op_id)
+        """Изменить покупку или продажу на месте."""
+        target = self._record(op_id)
         unknown = set(changes) - set(EDITABLE_FIELDS)
         if unknown:
             raise JournalError(f"нельзя изменить поля: {', '.join(sorted(unknown))}")
@@ -181,118 +188,117 @@ class Journal:
         ):
             rate, source = self._rate(after.currency, after.op_date, None)
             after = replace(after, fx_rate=rate, fx_source=source)
-        before_fields, after_fields = target.fields(), after.fields()
-        if before_fields == after_fields:
+        if target.fields() == after.fields():
             raise JournalError("ничего не изменилось")
-        kind = "sell_edited" if target.kind == "sell" else "buy_edited"
-        return self._add(Op(PENDING_ID, kind, after.op_date, utcnow(), after.market_hash_name, after.account_id,
-                            after.currency, after.quantity, after.price, after.fx_rate, after.fx_source,
-                            target_id=op_id, payload={"before": before_fields, "after": after_fields},
-                            comment=after.comment))
+        ops = self.ops()
+        self._check(ops, [after if op.id == op_id else op for op in ops], f"{KIND_NAMES[target.kind]} не изменена")
+        with self.conn:
+            self.conn.execute(
+                """UPDATE operations SET op_date = ?, market_hash_name = ?, account_id = ?, currency = ?, quantity = ?,
+                       price = ?, fx_rate = ?, fx_source = ?, comment = ? WHERE id = ?""",
+                (after.op_date.isoformat(), after.market_hash_name, after.account_id, int(after.currency),
+                 after.quantity, after.price, str(after.fx_rate) if after.fx_rate is not None else None,
+                 after.fx_source, after.comment, op_id),
+            )
+        return op_id
 
     def delete(self, op_id: int) -> int:
-        """Удалить покупку, продажу или исполнение ордера (отдельной операцией, её можно откатить)."""
-        target = self.current_op(op_id)
-        kind = "sell_deleted" if target.kind == "sell" else "buy_deleted"
-        return self._add(Op(PENDING_ID, kind, target.op_date, utcnow(), target.market_hash_name, target.account_id,
-                            target.currency, target.quantity, target.price, target.fx_rate, target.fx_source,
-                            target_id=op_id, payload={"before": target.fields()}))
+        """Удалить покупку или продажу. Покупка, привезённая переносом, удаляется вместе с переносом:
+        штуки возвращаются на исходный аккаунт."""
+        target = self._record(op_id)
+        gone = {op_id} | ({target.target_id} if is_transfer_buy(target) else set())
+        ops = self.ops()
+        self._check(ops, [op for op in ops if op.id not in gone], f"{KIND_NAMES[target.kind]} не удалена")
+        with self.conn:
+            # Сначала покупка: она ссылается на перенос.
+            self.conn.execute("DELETE FROM operations WHERE id = ?", (op_id,))
+            self.conn.executemany("DELETE FROM operations WHERE id = ?", [(i,) for i in gone - {op_id}])
+        return op_id
 
     # ---------- ордера ----------
 
     def place_order(self, item: str, account_id: int, currency: Currency, quantity: int, price: int,
                     comment: str = "") -> int:
-        today = today_msk()
-        self._check_trade(item, account_id, currency, quantity, price, today)
-        return self._add(Op(PENDING_ID, "order_placed", today, utcnow(), item, account_id, currency, quantity, price,
-                            comment=comment))
+        self._check_trade(item, account_id, currency, quantity, price, today_msk())
+        with self.conn:
+            return self.conn.execute(
+                """INSERT INTO orders (portfolio_id, market_hash_name, account_id, currency, quantity, price, comment,
+                       created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (self.portfolio_id, item, account_id, int(currency), quantity, price, comment, utcnow()),
+            ).lastrowid
 
     def change_order(self, order_id: int, price: int, quantity: int, comment: str | None = None,
                      account_id: int | None = None, currency: Currency | None = None) -> int:
         """Перевыставить ордер: цена, количество, комментарий, а также аккаунт и валюта (None — без изменений)."""
-        order = self._open_order(order_id)
+        order = self._order(order_id)
         account_id = order.account_id if account_id is None else account_id
         currency = order.currency if currency is None else Currency(currency)
         self._check_trade(order.market_hash_name, account_id, currency, quantity, price, today_msk())
-        return self._add(Op(PENDING_ID, "order_changed", today_msk(), utcnow(), order.market_hash_name,
-                            account_id, currency, quantity, price, order_id=order_id,
-                            payload={"before": {"price": order.price, "quantity": order.quantity, "comment": order.comment,
-                                                "account_id": order.account_id, "currency": int(order.currency)}},
-                            comment=order.comment if comment is None else comment))
+        with self.conn:
+            self.conn.execute(
+                "UPDATE orders SET price = ?, quantity = ?, comment = ?, account_id = ?, currency = ? WHERE id = ?",
+                (price, quantity, order.comment if comment is None else comment, account_id, int(currency), order_id),
+            )
+        return order_id
 
     def fill_order(self, order_id: int, quantity: int | None = None, op_date: date | None = None,
                    price: int | None = None, fx_rate: Decimal | None = None) -> int:
-        """Исполнение ордера. quantity=None — «Куплено всё»; price=None — по цене ордера."""
-        order = self._open_order(order_id)
+        """Ордер куплен (весь — quantity=None — или частично): покупка в портфеле, ордер уменьшается или уходит.
+        Комментарий ордера дописывается в комментарий строки портфеля через «; »."""
+        order = self._order(order_id)
         quantity = order.quantity if quantity is None else quantity
-        price = order.price if price is None else price
-        op_date = op_date or today_msk()
-        self._check_trade(order.market_hash_name, order.account_id, order.currency, quantity, price, op_date)
-        rate, source = self._rate(order.currency, op_date, fx_rate)
-        return self._add(Op(PENDING_ID, "order_filled", op_date, utcnow(), order.market_hash_name, order.account_id,
-                            order.currency, quantity, price, rate, source, order_id=order_id))
+        if quantity > order.quantity:
+            raise JournalError(f"куплено {quantity} шт. — больше, чем в ордере ({order.quantity} шт.)")
+        op_id = self.buy(order.market_hash_name, order.account_id, order.currency, quantity,
+                         order.price if price is None else price, op_date, fx_rate=fx_rate)
+        with self.conn:
+            if quantity == order.quantity:
+                self.conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+            else:
+                self.conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (order.quantity - quantity, order_id))
+            if order.comment.strip():
+                self._append_row_comment(order.market_hash_name, order.account_id, order.currency, order.comment.strip())
+        return op_id
 
     def remove_order(self, order_id: int) -> int:
-        order = self._open_order(order_id)
-        return self._add(Op(PENDING_ID, "order_removed", today_msk(), utcnow(), order.market_hash_name,
-                            order.account_id, order.currency, order.quantity, order.price, order_id=order_id))
+        self._order(order_id)
+        with self.conn:
+            self.conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+        return order_id
 
-    # ---------- откат ----------
-
-    def preview_cancel(self, op_id: int) -> Preview:
-        return self._preview(op_id, cancelled=True)
-
-    def preview_restore(self, op_id: int) -> Preview:
-        return self._preview(op_id, cancelled=False)
-
-    def cancel(self, op_id: int) -> Preview:
-        return self._toggle(op_id, cancelled=True)
-
-    def restore(self, op_id: int) -> Preview:
-        return self._toggle(op_id, cancelled=False)
+    def _append_row_comment(self, item: str, account_id: int, currency: Currency, text: str) -> None:
+        """Дописать в комментарий строки портфеля; тот же текст второй раз не повторяется."""
+        row = self.conn.execute(
+            """SELECT comment FROM position_comments
+               WHERE portfolio_id = ? AND market_hash_name = ? AND account_id = ? AND currency = ?""",
+            (self.portfolio_id, item, account_id, int(currency)),
+        ).fetchone()
+        parts = [p.strip() for p in (row["comment"] if row else "").split(";") if p.strip()]
+        if text in parts:
+            return
+        self.conn.execute(
+            """INSERT INTO position_comments (portfolio_id, market_hash_name, account_id, currency, comment)
+               VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET comment = excluded.comment""",
+            (self.portfolio_id, item, account_id, int(currency), "; ".join([*parts, text])[:500]),
+        )
 
     # ---------- внутреннее ----------
 
-    def _preview(self, op_id: int, cancelled: bool) -> Preview:
-        op = self.op(op_id)
-        if op.cancelled == cancelled:
-            raise JournalError(f"операция #{op_id} уже {'отменена' if cancelled else 'действует'}")
-        ops = self.ops()
-        before = replay(ops)
-        after = replay([replace(o, cancelled=cancelled) if o.id == op_id else o for o in ops])
-        return _diff(before, after, self._describe_violations(after, before))
-
-    def _toggle(self, op_id: int, cancelled: bool) -> Preview:
-        preview = self._preview(op_id, cancelled)
-        if not preview.allowed:
-            action = "откатить" if cancelled else "вернуть"
-            raise JournalError(f"нельзя {action} операцию #{op_id}, сначала откатите", preview.violations)
-        now = utcnow()
-        with self.conn:
-            self.conn.execute("UPDATE operations SET cancelled_at = ? WHERE id = ?", (now if cancelled else None, op_id))
-            self.conn.execute(
-                "INSERT INTO operation_cancellations (operation_id, action, user_id, at) VALUES (?, ?, ?, ?)",
-                (op_id, "cancel" if cancelled else "restore", self.user_id, now),
-            )
-        return preview
+    def _check(self, before_ops: list[Op], after_ops: list[Op], action: str) -> None:
+        problems = self._describe_violations(replay(after_ops), replay(before_ops))
+        if problems:
+            raise JournalError(f"{action}: противоречит другим записям", problems)
 
     def _add(self, op: Op) -> int:
         ops = self.ops()
-        before = replay(ops)
-        after = replay(ops + [op])
-        problems = self._describe_violations(after, before)
-        if problems:
-            raise JournalError(f"{KIND_NAMES[op.kind]} не записана: противоречит журналу", problems)
+        self._check(ops, ops + [op], f"{KIND_NAMES[op.kind]} не записана")
         with self.conn:
             return self._insert(op)
 
     def _add_pair(self, first: Op, second: Op) -> int:
-        """Две связанные операции одной записью (second.target_id указывает на first); возвращает id первой."""
+        """Две связанные записи разом (second.target_id указывает на first); возвращает id первой."""
         ops = self.ops()
-        before = replay(ops)
-        problems = self._describe_violations(replay(ops + [first, second]), before)
-        if problems:
-            raise JournalError(f"{KIND_NAMES[first.kind]} не записан: противоречит журналу", problems)
+        self._check(ops, ops + [first, second], f"{KIND_NAMES[first.kind]} не записан")
         with self.conn:
             first_id = self._insert(first)
             self._insert(replace(second, target_id=first_id))
@@ -319,27 +325,24 @@ class Journal:
         for v in after.violations:
             if (v.op_id, v.message) in known:
                 continue
-            ref = "новая операция" if v.op_id >= PENDING_ID else f"операция #{v.op_id} ({KIND_NAMES[self.op(v.op_id).kind]})"
+            ref = "новая запись" if v.op_id >= PENDING_ID else f"запись #{v.op_id} ({KIND_NAMES[self.op(v.op_id).kind]})"
             result.append(f"{ref}: {v.message}")
         return result
 
-    def current_op(self, op_id: int) -> Op:
-        """Покупка/продажа/исполнение в действующем виде (с учётом изменений)."""
+    def _record(self, op_id: int) -> Op:
+        """Покупка или продажа, которую можно изменить или удалить."""
         op = self.op(op_id)
-        if op.kind not in ("buy", "sell", "order_filled"):
+        if op.kind not in ("buy", "sell"):
             raise JournalError(f"изменять и удалять можно только покупки и продажи, а #{op_id} — {KIND_NAMES[op.kind]}")
-        if op.cancelled:
-            raise JournalError(f"операция #{op_id} отменена")
-        for current in effective_ops(self.ops()):
-            if current.id == op_id:
-                return current
-        raise JournalError(f"операция #{op_id} удалена")
+        return op
 
-    def _open_order(self, order_id: int) -> OrderState:
-        order = self.ledger().orders.get(order_id)
-        if order is None or order.status != "open":
+    def _order(self, order_id: int) -> Order:
+        row = self.conn.execute(
+            "SELECT * FROM orders WHERE id = ? AND portfolio_id = ?", (order_id, self.portfolio_id)
+        ).fetchone()
+        if row is None:
             raise JournalError(f"ордер #{order_id} не найден среди выставленных")
-        return order
+        return Order.from_row(row)
 
     def _rate(self, currency: Currency, op_date: date, fx_rate: Decimal | None) -> tuple[Decimal, str]:
         if fx_rate is not None:
@@ -372,24 +375,6 @@ class Journal:
             raise JournalError("количество должно быть целым больше нуля")
         if not isinstance(price, int) or price < 0:
             raise JournalError("цена не может быть отрицательной")
-
-
-def _diff(before: Ledger, after: Ledger, violations: list[str]) -> Preview:
-    positions = []
-    for key in sorted(set(before.positions) | set(after.positions)):
-        b, a = before.positions.get(key), after.positions.get(key)
-        qb, qa = (b.quantity if b else 0), (a.quantity if a else 0)
-        avg_b, avg_a = (b.avg_price if b else None), (a.avg_price if a else None)
-        if qb != qa or avg_b != avg_a:
-            positions.append(PositionChange(key, qb, qa, avg_b, avg_a))
-    sales_b = {s.op_id: s for s in before.sales}
-    sales_a = {s.op_id: s for s in after.sales}
-    sales = []
-    for op_id in sorted(set(sales_b) | set(sales_a)):
-        b, a = sales_b.get(op_id), sales_a.get(op_id)
-        if b is None or a is None or b.profit != a.profit or b.profit_usd != a.profit_usd:
-            sales.append(SaleChange(op_id, b and b.profit, a and a.profit, b and b.profit_usd, a and a.profit_usd))
-    return Preview(positions, sales, violations)
 
 
 def create_account(conn: sqlite3.Connection, name: str, portfolio_id: int = 1) -> int:

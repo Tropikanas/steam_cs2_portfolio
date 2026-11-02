@@ -1,11 +1,9 @@
-"""Пересчёт портфеля, ордеров и прибыли из журнала операций.
+"""Пересчёт портфеля и прибыли из записей покупок, продаж и переносов.
 
-Чистые функции без базы: на вход — все операции портфеля, на выход — состояние.
-
-Порядок пересчёта:
-- позиции — по дате сделки, внутри дня — по порядку ввода;
-- ордера — по порядку ввода (у выставления ордера нет даты сделки, исполнение
-  может быть внесено «задним числом»).
+Чистые функции без базы: на вход — все записи портфеля, на выход — состояние.
+Записи правятся и удаляются на месте (истории правок нет); порядок пересчёта — по дате сделки,
+внутри дня — по порядку ввода. «Позиция удалена» в базе не хранится: так называется план удаления,
+который превращается в уменьшение и удаление покупок (removal_matches).
 
 Деньги — Decimal в сотых долях валюты (копейки, центы), курсы — единиц валюты за 1 USD.
 """
@@ -21,9 +19,7 @@ from typing import Any, NamedTuple
 
 from steamfolio.currencies import Currency
 
-EDIT_KINDS = {"buy_edited", "sell_edited"}
-DELETE_KINDS = {"buy_deleted", "sell_deleted"}
-# Поля покупки/продажи, которые можно изменить через журнал.
+# Поля покупки и продажи, которые можно изменить.
 EDITABLE_FIELDS = ("op_date", "market_hash_name", "account_id", "currency", "quantity", "price", "fx_rate", "fx_source", "comment")
 DAYS_PER_MONTH = Decimal("30.4375")
 
@@ -164,22 +160,6 @@ class Sale:
         return self.profit_pct * 365 / self.days_held
 
 
-@dataclass
-class OrderState:
-    order_id: int
-    market_hash_name: str
-    account_id: int
-    currency: Currency
-    price: int
-    quantity: int  # сколько ещё не исполнено
-    comment: str
-    status: str = "open"  # open | filled | removed
-
-    @property
-    def total(self) -> int:
-        return self.price * self.quantity
-
-
 @dataclass(frozen=True)
 class Violation:
     op_id: int
@@ -189,7 +169,6 @@ class Violation:
 @dataclass
 class Ledger:
     positions: dict[RowKey, Position] = field(default_factory=dict)
-    orders: dict[int, OrderState] = field(default_factory=dict)
     sales: list[Sale] = field(default_factory=list)
     violations: list[Violation] = field(default_factory=list)
     invested_usd: Decimal = Decimal(0)  # все покупки по курсу на дату покупки
@@ -205,27 +184,11 @@ class Ledger:
         """Проданные или перенесённые целиком; удалённые как ошибочные сюда не входят."""
         return [p for p in self.positions.values() if p.quantity == 0 and not (p.removed and not p.exited)]
 
-    @property
-    def open_orders(self) -> list[OrderState]:
-        return [o for o in self.orders.values() if o.status == "open"]
-
 
 def effective_ops(ops: list[Op]) -> list[Op]:
-    """Действующие операции: без откаченных, с применёнными изменениями и удалениями."""
-    active = [op for op in ops if not op.cancelled]
-    last_edit: dict[int, Op] = {}
-    for op in sorted((op for op in active if op.kind in EDIT_KINDS), key=lambda o: o.entry_key):
-        last_edit[op.target_id] = op
-    deleted = {op.target_id for op in active if op.kind in DELETE_KINDS}
-    result = []
-    for op in active:
-        if op.kind in EDIT_KINDS or op.kind in DELETE_KINDS or op.id in deleted:
-            continue
-        if op.id in last_edit:
-            op = op.with_fields(last_edit[op.id].payload["after"])
-        result.append(op)
-    # Перенос — пара «списание с аккаунта» + «покупка на новом аккаунте»: без одной половины нет и другой
-    # (откат или удаление любой из них отменяет перенос целиком).
+    """Действующие записи. Перенос — пара «списание с аккаунта» + «покупка на новом аккаунте»:
+    без одной половины нет и другой (удаление покупки отменяет перенос целиком)."""
+    result = list(ops)
     splits = {op.id for op in result if is_split_transfer(op)}
     bought = {op.target_id for op in result if is_transfer_buy(op)}
     return [op for op in result
@@ -253,11 +216,11 @@ Holding = tuple[int, Decimal, Decimal]  # (количество, себесто�
 
 
 def removal_matches(ops: list[Op]) -> tuple[list[Op], dict[int, int], set[int]]:
-    """Какие поступления сняты удалением позиций: (действующие операции, {id поступления: снято штук}, id удалений).
+    """План удаления позиций: (записи в порядке пересчёта, {id поступления: снять штук}, id удалений).
 
-    Удалённая позиция — ошибочно внесённые штуки. Это последние пришедшие в строку штуки
-    (покупки, исполнения ордеров, переносы на этот аккаунт), ещё не снятые прежними удалениями:
-    одну покупку нельзя «удалить» дважды. Пришедшие переносом снимаются и с исходного аккаунта.
+    ops — записи плюс «позиция удалена» (их в базе нет, это запрос на удаление). Удалённая позиция —
+    ошибочно внесённые штуки: последние пришедшие в строку (покупки, переносы на этот аккаунт).
+    Пришедшие переносом снимаются и с исходного аккаунта, а перенос уменьшается на столько же.
     """
     ledger, timeline = _prepare(ops)
     valid: list[int] = []
@@ -298,11 +261,10 @@ def removal_matches(ops: list[Op]) -> tuple[list[Op], dict[int, int], set[int]]:
 
 
 def without_removed(ops: list[Op]) -> list[Op]:
-    """Журнал без ошибочно внесённого: снятые удалением штуки вычтены из своих поступлений, удаления убраны.
-    Остаются ровно те покупки, из которых сложились текущий портфель и закрытые позиции."""
+    """Записи после выполнения плана удаления: снятые штуки вычтены из своих поступлений, удаления убраны."""
     _, taken, removals = removal_matches(ops)
     result = []
-    for op in effective_ops(ops):  # с выставлениями ордеров: без них исполнения не засчитаются
+    for op in effective_ops(ops):
         if op.id in removals:
             continue
         if op.id in taken:
@@ -316,11 +278,11 @@ def without_removed(ops: list[Op]) -> list[Op]:
 def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
     """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
 
-    Строится по журналу без ошибочно внесённого (without_removed): удалённых штук нет и в прошлом.
+    Удалённые позиции стёрты из самих записей, поэтому их нет и в прошлом.
     Покупка, привезённая переносом, датирована первой покупкой исходной строки, но до переноса эти штуки
     лежали на исходном аккаунте — на графике она приходит в день переноса, иначе штуки посчитались бы дважды.
     """
-    clean = without_removed(ops)
+    clean = effective_ops(ops)
     transfers = {op.id: op for op in clean if is_split_transfer(op)}
     clean = [replace(op, op_date=transfers[op.target_id].op_date, created_at=transfers[op.target_id].created_at)
              if is_transfer_buy(op) and op.target_id in transfers and op.op_date < transfers[op.target_id].op_date
@@ -334,31 +296,21 @@ def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
             result[-1] = (op.op_date, state)
         else:
             result.append((op.op_date, state))
-    # Если удалено всё, что было куплено в начале, график начинается с первой оставшейся покупки.
-    while result and not result[0][1]:
+    while result and not result[0][1]:  # график — с первой покупки
         result.pop(0)
     return result
 
 
 def _brings_into(op: Op, key: RowKey) -> bool:
-    """Операция добавляет штуки в строку key: покупка, исполнение ордера или перенос на этот аккаунт."""
+    """Запись добавляет штуки в строку key: покупка (в том числе привезённая переносом)."""
     if op.market_hash_name != key.market_hash_name or op.currency != key.currency:
         return False
-    if op.kind == "transfer":
-        return not is_split_transfer(op) and op.to_account_id == key.account_id  # новый вид привозит покупкой
-    return op.kind in ("buy", "order_filled") and op.account_id == key.account_id
+    return op.kind == "buy" and op.account_id == key.account_id
 
 
 def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:
-    ledger = Ledger()
     current = effective_ops(ops)
-    # Ордер видит исполнение таким, каким оно было внесено: дальнейшие правки покупки (количество, цена,
-    # предмет, валюта, аккаунт) меняют только портфель, не остаток ордера.
-    as_entered = {op.id: op for op in ops}
-    order_ops = [as_entered[op.id] if op.kind == "order_filled" else op for op in current if op.kind.startswith("order_")]
-    valid_fills = _replay_orders(ledger, sorted(order_ops, key=lambda o: o.entry_key))
-    timeline = [op for op in current if op.kind in ("buy", "sell", "transfer", "position_removed") or op.id in valid_fills]
-    return ledger, sorted(timeline, key=timeline_key(current))
+    return Ledger(), sorted(current, key=timeline_key(current))
 
 
 def timeline_key(current: list[Op]) -> Callable[[Op], tuple]:
@@ -391,37 +343,6 @@ def _apply(ledger: Ledger, op: Op) -> None:
         _remove(ledger, op)
     else:
         _buy(ledger, op)
-
-
-def _replay_orders(ledger: Ledger, ops: list[Op]) -> set[int]:
-    valid_fills: set[int] = set()
-    for op in ops:
-        if op.kind == "order_placed":
-            ledger.orders[op.id] = OrderState(
-                op.id, op.market_hash_name, op.account_id, op.currency, op.price, op.quantity, op.comment
-            )
-            continue
-        order = ledger.orders.get(op.order_id)
-        if order is None or order.status != "open":
-            state = "не выставлен" if order is None else ("уже исполнен" if order.status == "filled" else "убран")
-            ledger.violations.append(Violation(op.id, f"ордер #{op.order_id} {state}"))
-            continue
-        if op.kind == "order_changed":
-            order.price, order.quantity, order.comment = op.price, op.quantity, op.comment
-            order.account_id, order.currency = op.account_id, op.currency
-        elif op.kind == "order_removed":
-            order.status = "removed"
-        elif op.kind == "order_filled":
-            if op.quantity > order.quantity:
-                ledger.violations.append(
-                    Violation(op.id, f"исполнение {op.quantity} шт. больше остатка ордера #{order.order_id} ({order.quantity} шт.)")
-                )
-                continue
-            order.quantity -= op.quantity
-            if order.quantity == 0:
-                order.status = "filled"
-            valid_fills.add(op.id)
-    return valid_fills
 
 
 def _buy(ledger: Ledger, op: Op) -> None:

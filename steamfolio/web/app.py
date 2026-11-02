@@ -352,8 +352,17 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
 
     @app.post("/api/transfer")
     def transfer(body: TransferIn, conn: Conn, user: User) -> dict[str, Any]:
+        cur = currency(body.currency)
+        comment = body.comment.strip()
         op_id = journal(conn, user).transfer(body.item, body.from_account_id, body.to_account_id,
-                                             currency(body.currency), body.quantity, body.date, body.comment.strip())
+                                             cur, body.quantity, body.date, comment)
+        if comment:  # комментарий строки (по умолчанию — исходной) переезжает в новую строку
+            with conn:
+                conn.execute(
+                    """INSERT INTO position_comments (portfolio_id, market_hash_name, account_id, currency, comment)
+                       VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET comment = excluded.comment""",
+                    (PORTFOLIO_ID, body.item, body.to_account_id, int(cur), comment[:500]),
+                )
         return {"op_id": op_id}
 
     @app.post("/api/remove-position")

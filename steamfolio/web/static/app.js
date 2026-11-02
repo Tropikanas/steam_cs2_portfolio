@@ -197,7 +197,7 @@ const SF = (() => {
   enhanceDatesIn(document);
 
   const TRASH_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
-  const FX_SOURCE = { steam: "курс Steam", cbr: "курс ЦБ на дату", usd: "", manual: "курс задан вручную" };
+  const FX_SOURCE = { steam: "курс Steam", cbr: "курс ЦБ на дату", usd: "", manual: "курс задан вручную", transfer: "курс исходных покупок" };
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const num = (v, d = 2) => v == null ? "—" : Number(v).toLocaleString("ru-RU", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -776,7 +776,7 @@ const SF = (() => {
         e.preventDefault();
         if (r.single_op) return editInCell(td, r.single_op, field);
         if (!r.buys.length) {
-          toast("Эта строка получена переносом с другого аккаунта — измените исходную покупку или перенос в «Журнале операций»", true);
+          toast("В этой строке нет покупок, которые можно изменить", true);
           return;
         }
         if (r.buys.length === 1) return editBuyForm(r.buys[0], field);
@@ -1026,11 +1026,11 @@ const SF = (() => {
         layout: [
           accountField(r, "С аккаунта"),
           { name: "to_account_id", label: "На аккаунт", type: "select", options: accountOptions(from) },
-          [{ name: "quantity", label: `Количество (есть ${num(r.quantity, 0)})`, type: "number", attrs: `min="1" max="${r.quantity}" step="1"`, value: r.quantity },
-            { name: "date", label: "Дата переноса", type: "date", value: today(), attrs: `max="${today()}"` }],
-          { name: "comment", label: "Комментарий", type: "textarea", required: false },
+          { name: "quantity", label: `Количество (есть ${num(r.quantity, 0)})`, type: "number", attrs: `min="1" max="${r.quantity}" step="1"`, value: r.quantity },
+          // Комментарий исходной строки по умолчанию переезжает в новую строку.
+          { name: "comment", label: "Комментарий", type: "textarea", required: false, value: r.comment || "" },
           { name: "_note", type: "static", label: "", required: false,
-            html: '<span class="muted small">Средняя цена и дата первой покупки переносятся вместе с предметами. «Вложено» и прибыль не меняются.</span>' },
+            html: '<span class="muted small">На новом аккаунте появится покупка по той же средней цене и с той же датой первой покупки — её можно править, как любую. «Вложено» и прибыль не меняются.</span>' },
         ],
         onInput: (ctx) => {
           const src = ctx.el("account_id").value;
@@ -1041,7 +1041,7 @@ const SF = (() => {
         },
         onSubmit: async (v) => {
           await api("POST", "/api/transfer", { item: r.item, currency: r.currency, from_account_id: +v.account_id,
-            to_account_id: +v.to_account_id, quantity: +v.quantity, date: v.date, comment: v.comment });
+            to_account_id: +v.to_account_id, quantity: +v.quantity, comment: v.comment });
           toast(`Перенесено: ${r.item}, ${v.quantity} шт.`);
           await reload();
         },
@@ -1310,7 +1310,7 @@ const SF = (() => {
   // ---------- «Журнал операций» ----------
 
   function journalPage() {
-    const FX_SHORT = { steam: "Steam", cbr: "ЦБ", manual: "вручную", usd: "" };
+    const FX_SHORT = { steam: "Steam", cbr: "ЦБ", manual: "вручную", usd: "", transfer: "перенос" };
     const mskDate = (ts) => new Date(ts).toLocaleDateString("sv-SE", { timeZone: "Europe/Moscow" });
     const opLink = (id) => `<a class="oplink" data-op="${id}">#${id}</a>`;
     const el = (id) => document.getElementById(id);

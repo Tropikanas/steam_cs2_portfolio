@@ -171,6 +171,58 @@ def test_transfer_validation_and_rollback(journal, acc, acc2):
         journal.edit(moved, quantity=1)
 
 
+def _arrival(journal, transfer_id):
+    return next(op for op in journal.ops() if op.kind == "buy" and op.target_id == transfer_id)
+
+
+def test_transferred_row_is_an_editable_buy(journal, fx, acc, acc2):
+    fx.by_date[(RUB, D("2026-01-10"))] = Decimal(100)
+    journal.buy(CASE, acc, RUB, 100, 1000, D("2026-01-10"))
+    moved = journal.transfer(CASE, acc, acc2, RUB, 30, comment="на второй")
+    buy = _arrival(journal, moved)
+    # покупка на новом аккаунте: средняя цена, дата первой покупки и курс исходной строки
+    assert (buy.account_id, buy.quantity, buy.price, buy.op_date, buy.fx_rate, buy.fx_source, buy.comment) == \
+        (acc2, 30, 1000, D("2026-01-10"), Decimal(100), "transfer", "на второй")
+    assert journal.ledger().invested_usd == 1000  # перенос не покупка: «Всего вложено» то же
+    # правится как любая покупка — исходная строка не меняется
+    journal.edit(buy.id, price=1200, currency=USD)
+    assert pos(journal, acc2, USD).quantity == 30 and pos(journal, acc2).quantity == 0
+    assert pos(journal, acc).quantity == 70
+
+
+def test_cancelling_either_half_cancels_transfer(journal, acc, acc2):
+    journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))
+    moved = journal.transfer(CASE, acc, acc2, RUB, 4)
+    journal.cancel(_arrival(journal, moved).id)
+    assert (pos(journal, acc).quantity, pos(journal, acc2).quantity) == (10, 0)
+    journal.restore(_arrival(journal, moved).id)
+    journal.cancel(moved)
+    assert (pos(journal, acc).quantity, pos(journal, acc2).quantity) == (10, 0)
+
+
+def test_transfer_does_not_mix_with_earlier_history_of_target_row(journal, acc, acc2):
+    # На acc2 раньше уже была своя строка: куплена и продана до переноса. Привезённая покупка датирована
+    # первой покупкой исходной строки (01.01), но в прошлую продажу не вмешивается.
+    journal.buy(CASE, acc, RUB, 10, 2000, D("2026-01-01"))
+    journal.buy(CASE, acc2, RUB, 10, 1000, D("2026-01-05"))
+    journal.sell(CASE, acc2, RUB, 10, 1500, D("2026-01-06"))
+    journal.transfer(CASE, acc, acc2, RUB, 10)
+    ledger = journal.ledger()
+    assert ledger.sales[0].profit == 10 * 500
+    dst = pos(journal, acc2)
+    assert (dst.quantity, dst.avg_price, dst.first_buy_date) == (10, 2000, D("2026-01-01"))
+
+
+def test_transfer_not_counted_twice_on_chart(journal, acc, acc2):
+    from steamfolio.ledger import daily_holdings
+
+    journal.buy(CASE, acc, RUB, 100, 1000, D("2026-01-10"))
+    journal.transfer(CASE, acc, acc2, RUB, 30)  # сегодня; покупка на acc2 датирована 10.01
+    by_day = {day: {k.account_id: v[0] for k, v in s.items()} for day, s in daily_holdings(journal.ops())}
+    assert by_day[D("2026-01-10")] == {acc: 100}
+    assert list(by_day.values())[-1] == {acc: 70, acc2: 30}
+
+
 # ---------- ордера ----------
 
 def test_order_partial_then_full_fill(journal, acc):

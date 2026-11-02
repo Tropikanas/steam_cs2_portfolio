@@ -11,7 +11,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from steamfolio.clock import today_msk
 from steamfolio.currencies import USER_CURRENCIES, Currency
@@ -127,14 +127,28 @@ class Journal:
         self, item: str, from_account_id: int, to_account_id: int, currency: Currency, quantity: int,
         op_date: date | None = None, comment: str = "",
     ) -> int:
-        """Перенести часть строки на другой аккаунт. Средняя цена и дата первой покупки переезжают вместе с предметами."""
+        """Перенести часть строки на другой аккаунт: списание с исходного аккаунта по средней цене и обычная
+        покупка на новом — по той же средней цене, датой первой покупки исходной строки и с тем же курсом к USD.
+        Новую строку можно править как любую купленную; откат переноса или покупки отменяет обе половины."""
         op_date = op_date or today_msk()
         self._check_trade(item, from_account_id, currency, quantity, 0, op_date)
         self._check_account(to_account_id)
         if to_account_id == from_account_id:
             raise JournalError("аккаунты «откуда» и «куда» совпадают")
-        return self._add(Op(PENDING_ID, "transfer", op_date, utcnow(), item, from_account_id, currency, quantity,
-                            comment=comment, to_account_id=to_account_id))
+        src = self.ledger().positions.get(RowKey(item, from_account_id, currency))
+        if src is None or src.quantity < quantity:
+            raise JournalError(f"перенос {quantity} шт. «{item}» при остатке {src.quantity if src else 0} шт.")
+        now = utcnow()
+        out = Op(PENDING_ID, "transfer", op_date, now, item, from_account_id, currency, quantity,
+                 comment=comment, to_account_id=to_account_id, payload={"split": True})
+        price = int(src.avg_price.to_integral_value(ROUND_HALF_UP))
+        if src.avg_price_usd:
+            rate, source = src.avg_price / src.avg_price_usd, "transfer"
+        else:  # бесплатные предметы — курс на дату первой покупки
+            rate, source = self._rate(currency, src.first_buy_date, None)
+        arrival = Op(PENDING_ID + 1, "buy", src.first_buy_date, now, item, to_account_id, currency, quantity, price,
+                     rate, source, target_id=PENDING_ID, comment=comment)
+        return self._add_pair(out, arrival)
 
     def remove_position(self, item: str, account_id: int, currency: Currency, comment: str = "") -> int:
         """Удалить весь текущий остаток строки как ошибочно внесённый: «Вложено» и «Всего вложено» уменьшаются."""
@@ -270,19 +284,34 @@ class Journal:
         if problems:
             raise JournalError(f"{KIND_NAMES[op.kind]} не записана: противоречит журналу", problems)
         with self.conn:
-            return self.conn.execute(
-                """INSERT INTO operations (portfolio_id, user_id, kind, op_date, created_at, market_hash_name,
-                       account_id, currency, quantity, price, fx_rate, fx_source, order_id, target_id, payload, comment,
-                       to_account_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    self.portfolio_id, self.user_id, op.kind, op.op_date.isoformat(), op.created_at,
-                    op.market_hash_name, op.account_id, int(op.currency) if op.currency is not None else None,
-                    op.quantity, op.price, str(op.fx_rate) if op.fx_rate is not None else None, op.fx_source,
-                    op.order_id, op.target_id, json.dumps(op.payload, ensure_ascii=False) if op.payload else None,
-                    op.comment, op.to_account_id,
-                ),
-            ).lastrowid
+            return self._insert(op)
+
+    def _add_pair(self, first: Op, second: Op) -> int:
+        """Две связанные операции одной записью (second.target_id указывает на first); возвращает id первой."""
+        ops = self.ops()
+        before = replay(ops)
+        problems = self._describe_violations(replay(ops + [first, second]), before)
+        if problems:
+            raise JournalError(f"{KIND_NAMES[first.kind]} не записан: противоречит журналу", problems)
+        with self.conn:
+            first_id = self._insert(first)
+            self._insert(replace(second, target_id=first_id))
+        return first_id
+
+    def _insert(self, op: Op) -> int:
+        return self.conn.execute(
+            """INSERT INTO operations (portfolio_id, user_id, kind, op_date, created_at, market_hash_name,
+                   account_id, currency, quantity, price, fx_rate, fx_source, order_id, target_id, payload, comment,
+                   to_account_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                self.portfolio_id, self.user_id, op.kind, op.op_date.isoformat(), op.created_at,
+                op.market_hash_name, op.account_id, int(op.currency) if op.currency is not None else None,
+                op.quantity, op.price, str(op.fx_rate) if op.fx_rate is not None else None, op.fx_source,
+                op.order_id, op.target_id, json.dumps(op.payload, ensure_ascii=False) if op.payload else None,
+                op.comment, op.to_account_id,
+            ),
+        ).lastrowid
 
     def _describe_violations(self, after: Ledger, before: Ledger) -> list[str]:
         known = {(v.op_id, v.message) for v in before.violations}
@@ -290,7 +319,7 @@ class Journal:
         for v in after.violations:
             if (v.op_id, v.message) in known:
                 continue
-            ref = "новая операция" if v.op_id == PENDING_ID else f"операция #{v.op_id} ({KIND_NAMES[self.op(v.op_id).kind]})"
+            ref = "новая операция" if v.op_id >= PENDING_ID else f"операция #{v.op_id} ({KIND_NAMES[self.op(v.op_id).kind]})"
             result.append(f"{ref}: {v.message}")
         return result
 

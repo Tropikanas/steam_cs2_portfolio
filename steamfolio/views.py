@@ -15,7 +15,9 @@ from steamfolio import catalog
 from steamfolio.collector import STALE_AFTER, latest_rates
 from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.journal import KIND_NAMES, Preview
-from steamfolio.ledger import DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, effective_ops, removal_matches
+from steamfolio.ledger import (
+    DELETE_KINDS, EDIT_KINDS, Ledger, Op, Position, effective_ops, is_split_transfer, removal_matches, timeline_order,
+)
 from steamfolio.market import listing_url
 
 # Снимок «24 ч назад» может быть сделан чуть позже: сбор идёт раз в 6 часов со случайной задержкой.
@@ -82,18 +84,36 @@ def last_update(conn: sqlite3.Connection) -> str | None:
 
 
 def _row_ops(ops: list[Op]) -> dict[tuple[str, int, Currency], list[Op]]:
-    """Действующие операции, из которых сложилась каждая строка (предмет, аккаунт, валюта).
+    """Операции, из которых сложилась каждая строка (предмет, аккаунт, валюта) с последнего открытия с нуля.
+
+    Порядок — как при пересчёте (по дате, внутри дня — по вводу): если строку обнулили (продали, перенесли,
+    удалили) и в тот же день купили снова, прежние операции к новой строке не относятся.
     Целиком снятые удалением позиции поступления и сами удаления сюда не входят (как и на графике)."""
     _, taken, removals = removal_matches(ops)
-    result: dict[tuple[str, int, Currency], list[Op]] = {}
-    for op in effective_ops(ops):
+    by_row: dict[tuple[str, int, Currency], list[tuple[Op, int]]] = {}  # операция и её знак для остатка
+    for op in timeline_order(ops):
         if op.id in removals or (op.id in taken and taken[op.id] >= op.quantity):
             continue
-        if op.kind in ("buy", "order_filled", "sell", "position_removed"):
-            result.setdefault((op.market_hash_name, op.account_id, op.currency), []).append(op)
+        row = (op.market_hash_name, op.account_id, op.currency)
+        if op.kind in ("buy", "order_filled"):
+            by_row.setdefault(row, []).append((op, op.quantity - taken.get(op.id, 0)))
+        elif op.kind in ("sell", "position_removed"):
+            by_row.setdefault(row, []).append((op, -op.quantity))
         elif op.kind == "transfer":
-            for account in (op.account_id, op.to_account_id):
-                result.setdefault((op.market_hash_name, account, op.currency), []).append(op)
+            moved = op.quantity - taken.get(op.id, 0)  # часть переноса могли удалить как ошибочную
+            by_row.setdefault(row, []).append((op, -moved))
+            if not is_split_transfer(op):  # старый перенос сам привозит штуки; новый — связанной покупкой
+                by_row.setdefault((op.market_hash_name, op.to_account_id, op.currency), []).append((op, moved))
+    result: dict[tuple[str, int, Currency], list[Op]] = {}
+    for row, items in by_row.items():
+        history: list[Op] = []
+        left = 0
+        for op, delta in items:
+            if left <= 0:
+                history = []
+            history.append(op)
+            left += delta
+        result[row] = history if left > 0 else []
     return result
 
 
@@ -164,7 +184,7 @@ def portfolio(
         for column, delta in PERIODS.items():
             row[column] = _pct(price, prices.at(name, currency, now - delta))
         # Покупки строки с последнего открытия позиции — их можно править из портфеля.
-        history = [op for p in group for op in row_ops.get(p.key, []) if op.op_date >= p.first_buy_date]
+        history = [op for p in group for op in row_ops.get(p.key, [])]
         buys = [op for op in history if op.kind in ("buy", "order_filled")]
         row["buys"] = [_buy_info(op, account_names) for op in sorted(buys, key=lambda o: o.sort_key)]
         # Строка ровно из одной покупки правится прямо в ячейке.

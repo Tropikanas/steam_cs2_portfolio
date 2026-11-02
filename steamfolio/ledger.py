@@ -16,6 +16,7 @@ import json
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from steamfolio.currencies import Currency
@@ -223,7 +224,22 @@ def effective_ops(ops: list[Op]) -> list[Op]:
         if op.id in last_edit:
             op = op.with_fields(last_edit[op.id].payload["after"])
         result.append(op)
-    return result
+    # Перенос — пара «списание с аккаунта» + «покупка на новом аккаунте»: без одной половины нет и другой
+    # (откат или удаление любой из них отменяет перенос целиком).
+    splits = {op.id for op in result if is_split_transfer(op)}
+    bought = {op.target_id for op in result if is_transfer_buy(op)}
+    return [op for op in result
+            if not (op.id in splits and op.id not in bought) and not (is_transfer_buy(op) and op.target_id not in splits)]
+
+
+def is_split_transfer(op: Op) -> bool:
+    """Перенос нового вида: только списывает с исходного аккаунта, на новый приходит связанная покупка."""
+    return op.kind == "transfer" and bool((op.payload or {}).get("split"))
+
+
+def is_transfer_buy(op: Op) -> bool:
+    """Покупка, которой перенос привёз штуки на новый аккаунт (target_id — сам перенос)."""
+    return op.kind == "buy" and op.target_id is not None
 
 
 def replay(ops: list[Op]) -> Ledger:
@@ -251,6 +267,7 @@ def removal_matches(ops: list[Op]) -> tuple[list[Op], dict[int, int], set[int]]:
         if op.kind == "position_removed" and len(ledger.violations) == problems:
             valid.append(index)
     taken: dict[int, int] = {}
+    position = {op.id: i for i, op in enumerate(timeline)}
 
     def take(index: int, key: RowKey, count: int) -> None:
         for i in range(index - 1, -1, -1):
@@ -265,6 +282,13 @@ def removal_matches(ops: list[Op]) -> tuple[list[Op], dict[int, int], set[int]]:
             taken[op.id] = taken.get(op.id, 0) + got
             if op.kind == "transfer":
                 take(i, RowKey(op.market_hash_name, op.account_id, op.currency), got)
+            elif is_transfer_buy(op) and op.target_id in position:
+                # Привезены переносом: до переноса эти штуки были на исходном аккаунте — снимаем и там,
+                # а перенос становится меньше на столько же.
+                t = position[op.target_id]
+                moved = timeline[t]
+                taken[moved.id] = taken.get(moved.id, 0) + got
+                take(t, RowKey(moved.market_hash_name, moved.account_id, moved.currency), got)
             count -= got
 
     for index in valid:
@@ -293,8 +317,15 @@ def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
     """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
 
     Строится по журналу без ошибочно внесённого (without_removed): удалённых штук нет и в прошлом.
+    Покупка, привезённая переносом, датирована первой покупкой исходной строки, но до переноса эти штуки
+    лежали на исходном аккаунте — на графике она приходит в день переноса, иначе штуки посчитались бы дважды.
     """
-    ledger, timeline = _prepare(without_removed(ops))
+    clean = without_removed(ops)
+    transfers = {op.id: op for op in clean if is_split_transfer(op)}
+    clean = [replace(op, op_date=transfers[op.target_id].op_date, created_at=transfers[op.target_id].created_at)
+             if is_transfer_buy(op) and op.target_id in transfers and op.op_date < transfers[op.target_id].op_date
+             else op for op in clean]
+    ledger, timeline = _prepare(clean)
     result: list[tuple[date, dict[RowKey, Holding]]] = []
     for op in timeline:
         _apply(ledger, op)
@@ -314,7 +345,7 @@ def _brings_into(op: Op, key: RowKey) -> bool:
     if op.market_hash_name != key.market_hash_name or op.currency != key.currency:
         return False
     if op.kind == "transfer":
-        return op.to_account_id == key.account_id
+        return not is_split_transfer(op) and op.to_account_id == key.account_id  # новый вид привозит покупкой
     return op.kind in ("buy", "order_filled") and op.account_id == key.account_id
 
 
@@ -327,7 +358,28 @@ def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:
     order_ops = [as_entered[op.id] if op.kind == "order_filled" else op for op in current if op.kind.startswith("order_")]
     valid_fills = _replay_orders(ledger, sorted(order_ops, key=lambda o: o.entry_key))
     timeline = [op for op in current if op.kind in ("buy", "sell", "transfer", "position_removed") or op.id in valid_fills]
-    return ledger, sorted(timeline, key=lambda o: o.sort_key)
+    return ledger, sorted(timeline, key=timeline_key(current))
+
+
+def timeline_key(current: list[Op]) -> Callable[[Op], tuple]:
+    """Порядок пересчёта: по дате, внутри дня — по вводу. Покупка, привезённая переносом, датирована первой
+    покупкой исходной строки, но применяется сразу после переноса — иначе она смешалась бы с прежней
+    историей строки на новом аккаунте (продажами и удалениями до переноса)."""
+    transfers = {op.id: op for op in current if is_split_transfer(op)}
+
+    def key(op: Op) -> tuple:
+        t = transfers.get(op.target_id) if is_transfer_buy(op) else None
+        if t is not None and op.sort_key < t.sort_key:
+            return (*t.sort_key, 1)
+        return (*op.sort_key, 0)
+
+    return key
+
+
+def timeline_order(ops: list[Op]) -> list[Op]:
+    """Действующие операции в порядке пересчёта (см. timeline_key)."""
+    current = effective_ops(ops)
+    return sorted(current, key=timeline_key(current))
 
 
 def _apply(ledger: Ledger, op: Op) -> None:
@@ -377,6 +429,8 @@ def _buy(ledger: Ledger, op: Op) -> None:
     pos = ledger.positions.setdefault(key, Position(key))
     if pos.quantity == 0:
         pos.reopen(op.op_date)
+    elif is_transfer_buy(op):  # привезено в открытую строку — первая покупка самая ранняя из двух, как раньше
+        pos.first_buy_date = min(pos.first_buy_date, op.op_date)
     amount = Decimal(op.quantity * op.price)
     amount_usd = amount / op.fx_rate
     pos.quantity += op.quantity
@@ -396,6 +450,11 @@ def _transfer(ledger: Ledger, op: Op) -> None:
         )
         return
     avg, avg_usd = src.avg_price, src.avg_price_usd
+    if is_split_transfer(op):
+        # Списание по средней цене; себестоимость на новом аккаунте принесла связанная покупка.
+        ledger.invested_usd -= avg_usd * op.quantity
+        _take_out(src, op.quantity, avg, avg_usd)
+        return
     dst_key = RowKey(op.market_hash_name, op.to_account_id, op.currency)
     dst = ledger.positions.setdefault(dst_key, Position(dst_key))
     if dst.quantity == 0:
@@ -405,13 +464,18 @@ def _transfer(ledger: Ledger, op: Op) -> None:
     dst.quantity += op.quantity
     dst.cost += avg * op.quantity
     dst.cost_usd += avg_usd * op.quantity
-    src.quantity -= op.quantity
+    _take_out(src, op.quantity, avg, avg_usd)
+
+
+def _take_out(src: Position, quantity: int, avg: Decimal, avg_usd: Decimal) -> None:
+    """Штуки ушли с аккаунта переносом: остаток — по прежней средней цене."""
+    src.quantity -= quantity
     src.exited = True
     if src.quantity == 0:
         src.cost = src.cost_usd = Decimal(0)
     else:
-        src.cost -= avg * op.quantity
-        src.cost_usd -= avg_usd * op.quantity
+        src.cost -= avg * quantity
+        src.cost_usd -= avg_usd * quantity
 
 
 def _remove(ledger: Ledger, op: Op) -> None:

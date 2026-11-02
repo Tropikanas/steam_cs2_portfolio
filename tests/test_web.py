@@ -187,7 +187,23 @@ def test_portfolio_tabs_and_row_purchases(client):
     assert row["quantity"] == 8 and row["single_op"] is None and [b["op_id"] for b in row["buys"]] == [one, two]
     client.post("/api/transfer", json={**trade, "from_account_id": acc, "to_account_id": acc2, "quantity": 2})
     moved = next(r for r in client.get("/api/portfolio").json()["rows"] if r["account_id"] == acc2)
-    assert moved["buys"] == [] and moved["single_op"] is None  # получена переносом
+    # получена переносом — это обычная покупка по средней цене исходной строки, её можно править в ячейке
+    assert moved["single_op"]["kind"] == "buy" and moved["quantity"] == 2 and moved["first_buy_date"] == row["first_buy_date"]
+
+
+def test_row_reopened_same_day_edits_in_cell(client):
+    # Всё перенесли и в тот же день купили снова — новая строка из одной покупки правится в ячейке.
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    acc2 = client.post("/api/accounts", json={"name": "B"}).json()["id"]
+    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
+    client.post("/api/buy", json={**trade, "quantity": 10, "price": "15", "date": "2024-11-02"})
+    client.post("/api/transfer", json={**trade, "from_account_id": acc, "to_account_id": acc2, "quantity": 10,
+                                       "comment": "с A"})
+    again = client.post("/api/buy", json={**trade, "quantity": 7, "price": "15"}).json()["op_id"]
+    rows = {r["account_id"]: r for r in client.get("/api/portfolio").json()["rows"]}
+    assert rows[acc]["single_op"]["op_id"] == again
+    assert rows[acc2]["first_buy_date"] == "2024-11-02" and rows[acc2]["comment"] == "с A"
 
 
 def test_removed_purchases_are_not_part_of_row(client):

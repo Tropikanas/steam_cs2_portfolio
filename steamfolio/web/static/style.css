@@ -52,6 +52,7 @@ a:hover { text-decoration: underline; }
 .up { color: var(--up); }
 .down { color: var(--down); }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.center, td.center { text-align: center; }  /* «ID позиции» */
 
 button, input, select, textarea { font: inherit; color: inherit; }
 button {

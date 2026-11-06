@@ -94,20 +94,20 @@ def test_unpriced_item_counted_at_cost(conn, journal, acc):
 
 
 def test_closed_positions_are_sales(conn, journal, acc):
-    journal.buy(CASE, acc, RUB, 4, 1000, date(2026, 9, 1))  # 10 ₽
-    journal.buy(CASE, acc, RUB, 4, 2000, date(2026, 9, 11))  # средняя 15 ₽
-    journal.sell(CASE, acc, RUB, 3, 3000, date(2026, 10, 1))  # по 30 ₽: +100 %, 30 дней с 01.09
-    journal.sell(CASE, acc, RUB, 5, 1500, date(2026, 10, 1))  # по 15 ₽: 0 %
-    journal.buy(CASE, acc, RUB, 1, 1000, date(2026, 10, 2))
-    journal.sell(CASE, acc, RUB, 1, 1100, date(2026, 10, 2))  # в тот же день: +10 % за 1 день
+    first = journal.buy(CASE, acc, RUB, 4, 1000, date(2026, 9, 1))  # 10 ₽
+    second = journal.buy(CASE, acc, RUB, 4, 2000, date(2026, 9, 11))  # 20 ₽ — своя строка
+    journal.sell(first, 4, 2000, date(2026, 10, 1))  # по 20 ₽: +100 %, 30 дней с 01.09
+    journal.sell(second, 4, 2000, date(2026, 10, 1))  # по 20 ₽: 0 %, 20 дней с 11.09
+    third = journal.buy(CASE, acc, RUB, 1, 1000, date(2026, 10, 2))
+    journal.sell(third, 1, 1100, date(2026, 10, 2))  # в тот же день: +10 % за 1 день
     assert views.portfolio(conn, journal.ledger(), now=NOW)["rows"] == []
-    rows = views.portfolio(conn, journal.ledger(), closed=True, now=NOW)["rows"]
-    got = [(r["quantity"], r["avg_price"], r["sale_price"], r["first_buy_date"], r["sale_date"], r["days"],
+    rows = views.portfolio(conn, journal.ledger(), closed=True, now=NOW, ops=journal.ops())["rows"]
+    got = [(r["lot_id"], r["quantity"], r["avg_price"], r["sale_price"], r["first_buy_date"], r["sale_date"], r["days"],
             r["profit_pct"], r["annual_pct"]) for r in rows]
     assert got == [
-        (1, 10.0, 11.0, "2026-10-02", "2026-10-02", 1, 10.0, 3650.0),
-        (5, 15.0, 15.0, "2026-09-01", "2026-10-01", 30, 0.0, 0.0),
-        (3, 15.0, 30.0, "2026-09-01", "2026-10-01", 30, 100.0, 1216.67),
+        (third, 1, 10.0, 11.0, "2026-10-02", "2026-10-02", 1, 10.0, 3650.0),
+        (second, 4, 20.0, 20.0, "2026-09-11", "2026-10-01", 20, 0.0, 0.0),
+        (first, 4, 10.0, 20.0, "2026-09-01", "2026-10-01", 30, 100.0, 1216.67),
     ]
 
 

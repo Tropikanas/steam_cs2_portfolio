@@ -15,7 +15,7 @@ from steamfolio import catalog
 from steamfolio.collector import STALE_AFTER, latest_rates
 from steamfolio.currencies import NAMES, SYMBOLS, USER_CURRENCIES, Currency
 from steamfolio.journal import Order
-from steamfolio.ledger import Ledger, Op, Position, timeline_order
+from steamfolio.ledger import Ledger, Op, Position
 from steamfolio.market import listing_url
 
 # Снимок «24 ч назад» может быть сделан чуть позже: сбор идёт раз в 6 часов со случайной задержкой.
@@ -81,26 +81,14 @@ def last_update(conn: sqlite3.Connection) -> str | None:
     ).fetchone()[0]
 
 
-def _row_ops(ops: list[Op]) -> dict[tuple[str, int, Currency], list[Op]]:
-    """Операции, из которых сложилась каждая строка (предмет, аккаунт, валюта) с последнего открытия с нуля.
-
-    Порядок — как при пересчёте (по дате, внутри дня — по вводу): если строку обнулили (продали, перенесли)
-    и в тот же день купили снова, прежние операции к новой строке не относятся."""
-    by_row: dict[tuple[str, int, Currency], list[tuple[Op, int]]] = {}  # запись и её знак для остатка
-    for op in timeline_order(ops):
-        row = (op.market_hash_name, op.account_id, op.currency)
-        by_row.setdefault(row, []).append((op, op.quantity if op.kind == "buy" else -op.quantity))
-    result: dict[tuple[str, int, Currency], list[Op]] = {}
-    for row, items in by_row.items():
-        history: list[Op] = []
-        left = 0
-        for op, delta in items:
-            if left <= 0:
-                history = []
-            history.append(op)
-            left += delta
-        result[row] = history if left > 0 else []
-    return result
+def _joined(comments: list[str]) -> str:
+    """Комментарии нескольких строк через «; », без повторов."""
+    parts: list[str] = []
+    for c in comments:
+        for p in (c or "").split(";"):
+            if p.strip() and p.strip() not in parts:
+                parts.append(p.strip())
+    return "; ".join(parts)
 
 
 def _buy_info(op: Op, account_names: dict[int, str]) -> dict[str, Any]:
@@ -113,25 +101,22 @@ def portfolio(
     conn: sqlite3.Connection, ledger: Ledger, *, collapse: bool = False, closed: bool = False,
     portfolio_id: int = 1, now: datetime | None = None, ops: list[Op] | None = None,
 ) -> dict[str, Any]:
-    """ops — журнал: с ним у строк есть покупки для редактирования (buys, single_op)."""
+    """Строка на каждую покупку (с остатком); collapse — итоги по предмету и валюте, только для просмотра.
+    ops — записи: с ними у строки есть её покупка для правки в ячейке (single_op) и комментарий."""
     if closed:
-        return sales(conn, ledger, portfolio_id)
-    row_ops = _row_ops(ops) if ops is not None else {}
+        return sales(conn, ledger, portfolio_id, ops)
+    lots = {op.id: op for op in ops or [] if op.kind == "buy"}
     now = now or datetime.now(UTC)
     prices = Prices(conn, now)
     rates = latest_rates(conn)
     account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
-    comments = {
-        (r["market_hash_name"], r["account_id"], r["currency"]): r["comment"]
-        for r in conn.execute("SELECT * FROM position_comments WHERE portfolio_id = ?", (portfolio_id,))
-    }
-    positions = ledger.closed_positions if closed else ledger.open_positions
+    positions = ledger.open_positions
     if collapse:
-        groups: dict[tuple[str, Currency], list[Position]] = {}
+        groups: dict[tuple, list[Position]] = {}
         for p in positions:
             groups.setdefault((p.key.market_hash_name, p.key.currency), []).append(p)
     else:
-        groups = {(p.key.market_hash_name, p.key.currency, p.key.account_id): [p] for p in positions}
+        groups = {p.key: [p] for p in positions}
     items = _items(conn, {p.key.market_hash_name for p in positions})
 
     rows = []
@@ -162,19 +147,20 @@ def portfolio(
             "pct_avg": _pct(price, avg),
             "accounts": [{"id": p.key.account_id, "name": account_names.get(p.key.account_id, "?"),
                           "quantity": p.quantity, "cost": _units(p.cost)} for p in group],
-            "account": ", ".join(account_names.get(p.key.account_id, "?") for p in group),
+            "account": ", ".join(dict.fromkeys(account_names.get(p.key.account_id, "?") for p in group)),
             "account_id": first.key.account_id if not collapse else None,
-            "comment": comments.get((name, first.key.account_id, int(currency)), "") if not collapse else "",
+            "comment": _joined([lots[p.key.lot].comment for p in group if p.key.lot in lots]),
             "cost_usd": _units(cost_usd),
+            "lot_id": first.key.lot if not collapse else None,
+            "lots": len(group),
         }
         for column, delta in PERIODS.items():
             row[column] = _pct(price, prices.at(name, currency, now - delta))
-        # Покупки строки с последнего открытия позиции — их можно править из портфеля.
-        history = [op for p in group for op in row_ops.get(p.key, [])]
-        buys = [op for op in history if op.kind == "buy"]
-        row["buys"] = [_buy_info(op, account_names) for op in sorted(buys, key=lambda o: o.sort_key)]
-        # Строка ровно из одной покупки правится прямо в ячейке.
-        row["single_op"] = _buy_info(buys[0], account_names) if not collapse and len(history) == 1 and buys else None
+        # Строка — одна покупка, она правится прямо в ячейке. bought — сколько куплено ею (остальное продано
+        # или перенесено): количество в ячейке — остаток, а в покупке — bought.
+        lot = lots.get(first.key.lot) if not collapse else None
+        row["single_op"] = _buy_info(lot, account_names) if lot else None
+        row["bought"] = first.bought if not collapse else None
         if quantity:
             invested += cost_usd
             price_usd, _ = prices.latest(name, Currency.USD)
@@ -188,7 +174,7 @@ def portfolio(
             row["value_usd"] = _units(Decimal(price_usd) * quantity) if price_usd is not None else None
         rows.append(row)
 
-    rows.sort(key=lambda r: (r["item"], r["currency"], r["account"]))
+    rows.sort(key=lambda r: (r["item"], r["currency"], r["account"], r["first_buy_date"], r["lot_id"] or 0))
     return {
         "rows": rows,
         "summary": {
@@ -232,17 +218,17 @@ def steam_rates(conn: sqlite3.Connection) -> dict[str, Any]:
     return {"taken_at": taken_at, "rates": rates, "items": list(items.values())}
 
 
-def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> dict[str, Any]:
-    """«Закрытые позиции»: строка на каждую продажу — что продано, по какой средней, с какой доходностью."""
+def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1, ops: list[Op] | None = None) -> dict[str, Any]:
+    """«Закрытые позиции»: строка на каждую продажу — что продано, по какой цене покупки, с какой доходностью.
+    Комментарий — у продажи, если он есть, иначе у строки, из которой продано."""
     account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
-    comments = {
-        (r["market_hash_name"], r["account_id"], r["currency"]): r["comment"]
-        for r in conn.execute("SELECT * FROM position_comments WHERE portfolio_id = ?", (portfolio_id,))
-    }
+    by_id = {op.id: op for op in ops or []}
     items = _items(conn, {s.key.market_hash_name for s in ledger.sales})
     rows = []
     for s in ledger.sales:
-        name, account_id, currency = s.key
+        name, account_id, currency, lot = s.key
+        sale, bought = by_id.get(s.op_id), by_id.get(lot)
+        comment = (sale.comment if sale and sale.comment else bought.comment if bought else "")
         rows.append({
             "op_id": s.op_id,
             "item": name,
@@ -263,7 +249,8 @@ def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> di
             "annual_pct": round(float(s.annual_pct), 2),
             "account": account_names.get(account_id, "?"),
             "account_id": account_id,
-            "comment": comments.get((name, account_id, int(currency)), ""),
+            "lot_id": lot,
+            "comment": comment,
         })
     rows.sort(key=lambda r: (r["sale_date"], r["op_id"]), reverse=True)
     return {"rows": rows, "summary": None, "last_update": last_update(conn)}

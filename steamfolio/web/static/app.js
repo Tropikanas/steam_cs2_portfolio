@@ -663,7 +663,9 @@ const SF = (() => {
       closed.checked = pane === "closed";
       document.getElementById("btn-buy").classList.toggle("hidden", closed.checked);
       document.getElementById("collapse-toggle").classList.toggle("hidden", closed.checked);
-      document.getElementById("edit-hint").classList.toggle("hidden", closed.checked);
+      document.getElementById("edit-hint").textContent = closed.checked
+        ? "Строка — одна продажа. Двойной щелчок по количеству, цене или дате продажи — изменить продажу; портфель и статистика пересчитаются."
+        : "Строка — одна покупка. Двойной щелчок по количеству, цене, дате покупки, валюте или аккаунту — изменить покупку.";
       reload();
     }
     window.addEventListener("hashchange", showPane);
@@ -672,18 +674,20 @@ const SF = (() => {
     let table;
 
     const columns = () => closed.checked ? closedColumns() : openColumns();
-    // «Закрытые позиции»: строка на каждую продажу.
+    // «Закрытые позиции»: строка на каждую продажу. Количество, цена и дата продажи правятся двойным щелчком.
     const closedColumns = () => [
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
       { id: "item", title: "Название", key: "item", cls: "name sticky-2", filter: true, text: (r) => r.item + " " + r.type,
         html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a><span class="type">${esc(r.type)}</span>` },
-      { id: "quantity", title: "Продано, шт.", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0) },
-      { id: "avg", title: "Средняя цена покупки", key: "avg_price", cls: "num", numeric: true, filter: true,
-        html: (r) => `<span title="в USD по курсам дат покупок: ${money(r.avg_price_usd, "USD", true)}">${money(r.avg_price, r.currency, true)}</span>` },
+      { id: "quantity", title: "Продано, шт.", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0),
+        bind: (td, r) => bindSaleEdit(td, r, "quantity") },
+      { id: "avg", title: "Цена покупки", key: "avg_price", cls: "num", numeric: true, filter: true,
+        html: (r) => `<span title="в USD по курсу на дату покупки: ${money(r.avg_price_usd, "USD", true)}">${money(r.avg_price, r.currency, true)}</span>` },
       { id: "sale_price", title: "Цена продажи", key: "sale_price", cls: "num", numeric: true, filter: true,
-        html: (r) => money(r.sale_price, r.currency) },
-      { id: "first", title: "Первая покупка", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
-      { id: "sale_date", title: "Дата продажи", key: "sale_date", filter: true, text: (r) => date(r.sale_date), html: (r) => date(r.sale_date) },
+        html: (r) => money(r.sale_price, r.currency), bind: (td, r) => bindSaleEdit(td, r, "price") },
+      { id: "first", title: "Дата покупки", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
+      { id: "sale_date", title: "Дата продажи", key: "sale_date", filter: true, text: (r) => date(r.sale_date), html: (r) => date(r.sale_date),
+        bind: (td, r) => bindSaleEdit(td, r, "date") },
       { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
       { id: "profit", title: "Прибыль", key: "profit", cls: "num", numeric: true, filter: true,
         html: (r) => `<span class="${r.profit > 0 ? "up" : r.profit < 0 ? "down" : ""}" title="В USD по курсам дат: ${money(r.profit_usd, "USD")}">${r.profit > 0 ? "+" : ""}${money(r.profit, r.currency)}</span>` },
@@ -697,24 +701,26 @@ const SF = (() => {
         html: () => `<button class="small danger icon-btn" title="Удалить продажу" aria-label="Удалить продажу">${TRASH_ICON}</button>`,
         bind: (td, r) => { td.querySelector("button").onclick = () => deleteSaleForm(r); } },
     ];
+    // «Текущий портфель»: строка на каждую покупку. «Объединить строки» — итоги по предмету и валюте, только просмотр.
     const openColumns = () => [
       { id: "icon", title: "", cls: "icon sticky-1", sortable: false, html: (r) => icon(r.icon) },
       { id: "item", title: "Название", key: "item", cls: "name sticky-2", filter: true, text: (r) => r.item + " " + r.type,
-        html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a><span class="type">${esc(r.type)}</span>` },
+        html: (r) => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.item)}</a><span class="type">${esc(r.type)}</span>${
+          collapse.checked && r.lots > 1 ? `<span class="type">${r.lots} покупки</span>` : ""}` },
       { id: "quantity", title: "Кол-во", key: "quantity", cls: "num", numeric: true, filter: true, html: (r) => num(r.quantity, 0),
         bind: (td, r) => bindEdit(td, r, "quantity") },
-      { id: "avg", title: "Средняя цена", key: "avg_price", cls: "num", numeric: true, filter: true,
-        html: (r) => `<span title="${r.avg_price_usd != null ? "в USD по курсам дат покупок: " + money(r.avg_price_usd, "USD", true) : ""}">${money(r.avg_price, r.currency, true)}</span>`,
+      { id: "avg", title: collapse.checked ? "Средняя цена" : "Цена покупки", key: "avg_price", cls: "num", numeric: true, filter: true,
+        html: (r) => `<span title="${r.avg_price_usd != null ? "в USD по курсу на дату покупки: " + money(r.avg_price_usd, "USD", true) : ""}">${money(r.avg_price, r.currency, true)}</span>`,
         bind: (td, r) => bindEdit(td, r, "price") },
-      { id: "first", title: "Первая покупка", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date),
-        bind: (td, r) => bindEdit(td, r, "date") },
+      { id: "first", title: collapse.checked ? "Первая покупка" : "Дата покупки", key: "first_buy_date", filter: true,
+        text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date), bind: (td, r) => bindEdit(td, r, "date") },
       { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency,
         bind: (td, r) => bindEdit(td, r, "currency") },
       { id: "price", title: "Текущая цена", key: "price", cls: "num", numeric: true, filter: true,
         html: (r) => r.price_stale
           ? `<span class="stale" title="Цена устарела: снята ${esc(dateTime(r.price_at))}. Обновится при ближайшем сборе цен (раз в 6 часов)">${money(r.price, r.currency)} ⏱</span>`
           : `<span title="Лучший ордер на покупку, снят ${esc(dateTime(r.price_at))}">${money(r.price, r.currency)}</span>` },
-      { id: "pct_avg", title: "% к средней", key: "pct_avg", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_avg) },
+      { id: "pct_avg", title: collapse.checked ? "% к средней" : "% к цене покупки", key: "pct_avg", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_avg) },
       { id: "pct_1d", title: "% сутки", key: "pct_1d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_1d) },
       { id: "pct_7d", title: "% неделя", key: "pct_7d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_7d) },
       { id: "pct_30d", title: "% месяц", key: "pct_30d", cls: "num", numeric: true, filter: true, html: (r) => pct(r.pct_30d) },
@@ -722,11 +728,11 @@ const SF = (() => {
         values: (r) => r.account_id != null ? [r.account] : r.accounts.map((a) => a.name), html: (r) => esc(r.account),
         bind: (td, r) => bindEdit(td, r, "account_id") },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true,
-        html: (r) => collapse.checked || closed.checked ? esc(r.comment)
+        html: (r) => collapse.checked ? esc(r.comment)
           : `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`,
-        bind: (td, r) => !collapse.checked && !closed.checked && bindComment(td, r) },
+        bind: (td, r) => !collapse.checked && bindComment(td, r) },
       { id: "actions", title: "", cls: "actions", sortable: false,
-        html: () => closed.checked ? "" : '<button class="small" data-a="sell">Продано</button><button class="small" data-a="move">Перенести</button>'
+        html: () => collapse.checked ? "" : '<button class="small" data-a="sell">Продано</button><button class="small" data-a="move">Перенести</button>'
           + `<button class="small danger icon-btn" data-a="remove" title="Удалить позицию" aria-label="Удалить позицию">${TRASH_ICON}</button>`,
         bind: (td, r) => {
           const actions = { sell: sellForm, move: moveForm, remove: removeForm };
@@ -734,46 +740,59 @@ const SF = (() => {
         } },
     ];
 
-    // ---------- правка покупок из портфеля (двойной щелчок) ----------
-    // Строка из одной покупки правится прямо в ячейке; из нескольких — сначала выбирается покупка.
-    // Правка меняет саму покупку: средняя, прибыль и графики пересчитываются.
+    // ---------- правка двойным щелчком ----------
+    // Строка портфеля — одна покупка: правка меняет саму покупку (цена, дата, валюта, аккаунт, количество).
+    // В ячейке «Кол-во» — остаток; если из строки уже продавали или переносили, в покупке их тоже учтём.
+    const COLLAPSED_HINT = "Строки объединены — чтобы изменить покупку, снимите «Объединить строки»";
 
     function bindEdit(td, r, field) {
       td.classList.add("editable");
       td.title = td.title || "Двойной щелчок — изменить";
       td.ondblclick = (e) => {
         e.preventDefault();
-        if (r.single_op) return editInCell(td, r.single_op, field);
-        if (!r.buys.length) {
-          toast("В этой строке нет покупок, которые можно изменить", true);
-          return;
-        }
-        if (r.buys.length === 1) return editBuyForm(r.buys[0], field);
-        pickBuyForm(r, field);
+        if (!r.single_op) { toast(COLLAPSED_HINT, true); return; }
+        const b = r.single_op;
+        const sold = r.bought - r.quantity;  // ушло из строки продажами и переносами
+        editInCell(td, {
+          values: { quantity: r.quantity, price: b.price, date: b.date, currency: b.currency, account_id: b.account_id },
+          accounts: accountChoices(b),
+          save: (changes) => saveEdit(b.op_id, "quantity" in changes ? { ...changes, quantity: changes.quantity + sold } : changes,
+            "Покупка изменена"),
+        }, field);
+      };
+    }
+
+    // Продажа в «Закрытых позициях»: количество, цена и дата продажи. Портфель и статистика пересчитываются.
+    function bindSaleEdit(td, r, field) {
+      td.classList.add("editable");
+      td.title = td.title || "Двойной щелчок — изменить продажу";
+      td.ondblclick = (e) => {
+        e.preventDefault();
+        editInCell(td, {
+          values: { quantity: r.quantity, price: r.sale_price, date: r.sale_date },
+          save: (changes) => saveEdit(r.op_id, changes, "Продажа изменена — портфель пересчитан"),
+        }, field);
       };
     }
 
     // Активные аккаунты и текущий аккаунт покупки (даже если он скрыт) — чтобы список не подменил его молча.
     const accountChoices = (b) => meta.accounts.filter((a) => !a.hidden || a.id === b.account_id);
 
-    function editValue(b, field) {
-      return field === "price" ? String(b.price).replace(".", ",") : field === "account_id" ? b.account_id : b[field];
-    }
-
-    async function saveEdit(b, changes) {
-      await api("POST", `/api/ops/${b.op_id}/edit`, changes);
-      toast("Покупка изменена");
+    async function saveEdit(opId, changes, done) {
+      await api("POST", `/api/ops/${opId}/edit`, changes);
+      toast(done);
       await reload();
     }
 
-    function editInCell(td, b, field) {
+    function editInCell(td, { values, accounts = [], save }, field) {
+      const shown = (f) => f === "price" ? String(values.price).replace(".", ",") : values[f];
       const control = field === "currency" || field === "account_id" ? document.createElement("select") : document.createElement("input");
       if (field === "currency") control.innerHTML = currencyOptions().map((o) => `<option value="${esc(o.value)}">${esc(o.value)}</option>`).join("");
-      if (field === "account_id") control.innerHTML = accountChoices(b).map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
+      if (field === "account_id") control.innerHTML = accounts.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
       if (field === "date") { control.type = "date"; control.max = today(); }
       if (field === "quantity") { control.type = "number"; control.min = 1; control.step = 1; }
       if (field === "price") control.inputMode = "decimal";
-      control.value = editValue(b, field);
+      control.value = shown(field);
       control.className = "cell-editor";
       td.ondblclick = null;
       td.replaceChildren(control);
@@ -786,10 +805,9 @@ const SF = (() => {
         if (done) return;
         done = true;
         const value = control.value.trim();
-        if (!commit || value === "" || String(value) === String(editValue(b, field))) { table.render(); return; }
-        const changes = { [field]: field === "quantity" || field === "account_id" ? +value : value };
+        if (!commit || value === "" || String(value) === String(shown(field))) { table.render(); return; }
         try {
-          await saveEdit(b, changes);
+          await save({ [field]: field === "quantity" || field === "account_id" ? +value : value });
         } catch (e) {
           toast(e.message + (e.violations && e.violations.length ? ": " + e.violations.join("; ") : ""), true);
           table.render();
@@ -807,50 +825,7 @@ const SF = (() => {
       if (control.tagName === "SELECT") control.addEventListener("change", () => finish(true));
     }
 
-    function pickBuyForm(r, field) {
-      openForm({
-        title: `Какую покупку изменить: ${r.item}`,
-        submit: "Далее",
-        layout: [{ name: "op", label: `Строка собрана из ${r.buys.length} покупок`, type: "select",
-          options: r.buys.map((b) => ({ value: b.op_id,
-            label: `${date(b.date)} · ${num(b.quantity, 0)} шт. по ${money(b.price, b.currency)} · ${b.account}` })) }],
-        onSubmit: async (v) => {
-          // Форма правки открывается после закрытия этой.
-          setTimeout(() => editBuyForm(r.buys.find((b) => b.op_id === +v.op), field), 0);
-        },
-      });
-    }
-
-    function editBuyForm(b, focus) {
-      const layout = [
-        [{ name: "date", label: "Дата покупки", type: "date", value: b.date, attrs: `max="${today()}"` },
-          { name: "quantity", label: "Количество", type: "number", attrs: 'min="1" step="1"', value: b.quantity }],
-        { name: "price", label: `Цена за штуку, ${b.currency}`, inputmode: "decimal", value: String(b.price).replace(".", ","),
-          attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' },
-        [{ name: "currency", label: "Валюта", type: "select", options: currencyOptions(), value: b.currency },
-          { name: "account_id", label: "Аккаунт", type: "select",
-            options: accountChoices(b).map((a) => ({ value: a.id, label: a.name })), value: b.account_id }],
-      ];
-      layout.push({ name: "_note", type: "static", label: "", required: false,
-        html: `<span class="muted small">Покупка от ${date(b.date)}. Изменение сразу меняет саму покупку — отменить его можно только обратной правкой.</span>` });
-      const ctx = openForm({
-        title: "Изменить покупку",
-        layout,
-        onSubmit: async (v) => {
-          const changes = {};
-          if (v.date !== b.date) changes.date = v.date;
-          if (+v.quantity !== b.quantity) changes.quantity = +v.quantity;
-          if (parseNum(v.price) !== b.price) changes.price = v.price;
-          if (v.currency !== b.currency) changes.currency = v.currency;
-          if (+v.account_id !== b.account_id) changes.account_id = +v.account_id;
-          if (!Object.keys(changes).length) return;
-          await saveEdit(b, changes);
-        },
-      });
-      const target = ctx.el(focus);
-      if (target) { target.focus(); if (target.select) target.select(); }
-    }
-
+    // Комментарий строки — комментарий её покупки.
     function bindComment(td, r) {
       const span = td.querySelector(".comment-edit");
       const edit = () => {
@@ -865,7 +840,7 @@ const SF = (() => {
           done = true;
           if (commit && input.value.trim() !== r.comment) {
             try {
-              await api("POST", "/api/position-comment", { item: r.item, account_id: r.account_id, currency: r.currency, comment: input.value });
+              await api("POST", `/api/ops/${r.lot_id}/edit`, { comment: input.value });
               r.comment = input.value.trim();
             } catch (e) { toast(e.message, true); }
           }
@@ -887,7 +862,7 @@ const SF = (() => {
       const s = data.summary;
       document.getElementById("summary").innerHTML = closed.checked ? ""
         : holdingTiles(s, (n) => `без цены: ${n} — учтены по себестоимости`);
-      // Продажи всегда по аккаунтам — «Объединить строки» к ним не относится.
+      // Продажи всегда построчно — «Объединить строки» к ним не относится.
       collapse.disabled = closed.checked;
       table = makeTable(document.getElementById("table"), columns(), {
         storageKey: closed.checked ? "closed" : "portfolio",
@@ -930,55 +905,36 @@ const SF = (() => {
       });
     }
 
-    function accountField(r, label) {
-      // В свёрнутом виде строка объединяет аккаунты — нужно выбрать, с какого.
-      if (r.account_id != null) return { name: "account_id", label, type: "select", options: [{ value: r.account_id, label: r.account }] };
-      return { name: "account_id", label, type: "select",
-        options: r.accounts.map((a) => ({ value: a.id, label: `${a.name} — ${a.quantity} шт.` })) };
-    }
-    const available = (r, accountId) => r.account_id != null ? r.quantity : (r.accounts.find((a) => a.id === +accountId) || {}).quantity;
-    // При смене аккаунта в свёрнутом виде количество подстраивается под его остаток.
-    function syncQuantity(ctx, r) {
-      const acc = ctx.el("account_id").value;
-      const max = available(r, acc);
-      const q = ctx.el("quantity");
-      q.max = max;
-      if (ctx.lastAccount !== acc) {
-        q.value = max;
-        ctx.form.querySelector('[data-field="quantity"] > span').textContent = `Количество (есть ${num(max, 0)})`;
-        ctx.lastAccount = acc;
-      }
-    }
+    const rowLabel = (r) => `${esc(r.item)} · ${esc(r.account)} · покупка от ${date(r.first_buy_date)} по ${money(r.avg_price, r.currency, true)}`;
 
+    // Продажа — из этой строки (покупки): при удалении продажи штуки вернутся сюда же.
     function sellForm(r) {
       openForm({
         title: `Продано: ${r.item}`,
         submit: "Записать продажу",
         info: true,
         layout: [
-          accountField(r, "С аккаунта"),
+          { name: "_row", type: "static", label: "", required: false, html: `<span class="muted small">${rowLabel(r)}</span>` },
           [{ name: "quantity", label: `Количество (есть ${num(r.quantity, 0)})`, type: "number", attrs: `min="1" max="${r.quantity}" step="1"`, value: r.quantity },
             { name: "price", label: `Чистая цена за штуку после комиссии, ${r.currency}`, inputmode: "decimal", attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' }],
           { name: "date", label: "Дата продажи", type: "date", value: today(), attrs: `max="${today()}"` },
           fxField,
         ],
         onInput: (ctx) => {
-          syncQuantity(ctx, r);
           const price = () => parseNum(ctx.el("price").value);
           const qty = () => parseInt(ctx.el("quantity").value, 10);
           ctx.fx = ctx.fx || fxBlock(ctx, {
             currency: () => r.currency,
             day: () => ctx.el("date").value || today(),
             amount: () => price() != null && qty() ? price() * qty() : null,
-            // В свёрнутом виде у аккаунтов разная средняя — прибыль не прогнозируем.
-            extra: () => r.account_id != null && price() != null && qty()
-              ? `<br>Прибыль: <b class="${price() >= r.avg_price ? "up" : "down"}">${money((price() - r.avg_price) * qty(), r.currency)}</b> <span class="muted">(средняя ${money(r.avg_price, r.currency, true)})</span>` : "",
+            extra: () => price() != null && qty()
+              ? `<br>Прибыль: <b class="${price() >= r.avg_price ? "up" : "down"}">${money((price() - r.avg_price) * qty(), r.currency)}</b> <span class="muted">(цена покупки ${money(r.avg_price, r.currency, true)})</span>` : "",
           });
           ctx.fx();
         },
         onSubmit: async (v) => {
-          await api("POST", "/api/sell", { item: r.item, currency: r.currency, account_id: +v.account_id, quantity: +v.quantity,
-            price: v.price, date: v.date, fx_rate: v.fx_rate || null });
+          await api("POST", "/api/sell", { lot_id: r.lot_id, quantity: +v.quantity, price: v.price, date: v.date,
+            fx_rate: v.fx_rate || null });
           toast(`Продажа записана: ${r.item}, ${v.quantity} шт.`);
           await reload();
         },
@@ -986,68 +942,53 @@ const SF = (() => {
     }
 
     function moveForm(r) {
-      const from = r.account_id ?? r.accounts[0].id;
-      if (!accountOptions(from).length) { toast("Нет другого аккаунта — добавьте его кнопкой «Аккаунты»", true); return; }
+      if (!accountOptions(r.account_id).length) { toast("Нет другого аккаунта — добавьте его кнопкой «Список аккаунтов»", true); return; }
       openForm({
         title: `Перенести на другой аккаунт: ${r.item}`,
         submit: "Перенести",
         layout: [
-          accountField(r, "С аккаунта"),
-          { name: "to_account_id", label: "На аккаунт", type: "select", options: accountOptions(from) },
+          { name: "_row", type: "static", label: "", required: false, html: `<span class="muted small">${rowLabel(r)}</span>` },
+          { name: "to_account_id", label: "На аккаунт", type: "select", options: accountOptions(r.account_id) },
           { name: "quantity", label: `Количество (есть ${num(r.quantity, 0)})`, type: "number", attrs: `min="1" max="${r.quantity}" step="1"`, value: r.quantity },
           // Комментарий исходной строки по умолчанию переезжает в новую строку.
           { name: "comment", label: "Комментарий", type: "textarea", required: false, value: r.comment || "" },
           { name: "_note", type: "static", label: "", required: false,
-            html: '<span class="muted small">На новом аккаунте появится покупка по той же средней цене и с той же датой первой покупки — её можно править, как любую. «Вложено» и прибыль не меняются.</span>' },
+            html: '<span class="muted small">На новом аккаунте появится строка — покупка по той же цене и с той же датой покупки, её можно править, как любую. «Вложено» и прибыль не меняются.</span>' },
         ],
-        onInput: (ctx) => {
-          const src = ctx.el("account_id").value;
-          syncQuantity(ctx, r);
-          const to = ctx.el("to_account_id");
-          const keep = to.value;
-          to.innerHTML = accountOptions(+src).map((o) => `<option value="${o.value}" ${String(o.value) === keep ? "selected" : ""}>${esc(o.label)}</option>`).join("");
-        },
         onSubmit: async (v) => {
-          await api("POST", "/api/transfer", { item: r.item, currency: r.currency, from_account_id: +v.account_id,
-            to_account_id: +v.to_account_id, quantity: +v.quantity, comment: v.comment });
+          await api("POST", "/api/transfer", { lot_id: r.lot_id, to_account_id: +v.to_account_id, quantity: +v.quantity,
+            comment: v.comment });
           toast(`Перенесено: ${r.item}, ${v.quantity} шт.`);
           await reload();
         },
       });
     }
 
-    // Удаление позиции как ошибочно внесённой: «Вложено» и «Всего вложено» уменьшаются, прибыли нет.
+    // Удаление позиции как ошибочно внесённой: остаток строки стирается из её покупки, прибыли нет.
     function removeForm(r) {
       openForm({
         title: `Удалить позицию: ${r.item}`,
         submit: "Удалить позицию",
-        layout: [
-          accountField(r, "Аккаунт"),
-          { name: "_note", type: "static", label: "", required: false, html: '<div class="info" data-remove-info></div>' },
-        ],
-        onInput: (ctx) => {
-          const acc = r.accounts.find((a) => a.id === +ctx.el("account_id").value) || r.accounts[0];
-          ctx.form.querySelector("[data-remove-info]").innerHTML =
-            `<p>Будет удалено <b>${num(acc.quantity, 0)} шт.</b> <b>${esc(r.item)}</b> с аккаунта <b>${esc(acc.name)}</b>
-            в валюте <b>${esc(r.currency)}</b> — как ошибочно внесённые.</p>
-            <p>Объём вложенных средств уменьшится на <b>${money(acc.cost, r.currency)}</b>.<br>Прошлые продажи не изменятся.</p>`;
-        },
-        onSubmit: async (v) => {
-          await api("POST", "/api/remove-position", { item: r.item, currency: r.currency, account_id: +v.account_id });
+        layout: [{ name: "_note", type: "static", label: "", required: false, html: `<div class="info">
+          <p>Будет удалено <b>${num(r.quantity, 0)} шт.</b> <b>${esc(r.item)}</b> с аккаунта <b>${esc(r.account)}</b>
+          в валюте <b>${esc(r.currency)}</b> — как ошибочно внесённые.</p>
+          <p>Объём вложенных средств уменьшится на <b>${money(r.accounts[0].cost, r.currency)}</b>.<br>Прошлые продажи не изменятся.</p></div>` }],
+        onSubmit: async () => {
+          await api("POST", "/api/remove-position", { lot_id: r.lot_id });
           toast(`Позиция удалена: ${r.item}`);
           await reload();
         },
       });
     }
 
-    // Удаление строки «Закрытых позиций» = удаление продажи: штуки возвращаются в портфель.
+    // Удаление строки «Закрытых позиций» = удаление продажи: штуки возвращаются в строку, из которой проданы.
     function deleteSaleForm(r) {
       openForm({
         title: `Удалить продажу: ${r.item}`,
         submit: "Удалить и вернуть в портфолио",
         layout: [{ name: "_note", type: "static", label: "", required: false, html: `<div class="info">
-          <p><b>Строка будет возвращена в портфолио:</b> ${num(r.quantity, 0)} шт. <b>${esc(r.item)}</b>
-          на аккаунт <b>${esc(r.account)}</b> в валюте <b>${esc(r.currency)}</b> по средней цене ${money(r.avg_price, r.currency, true)}.</p>
+          <p><b>В портфолио вернётся:</b> ${num(r.quantity, 0)} шт. <b>${esc(r.item)}</b>
+          в строку покупки от ${date(r.first_buy_date)} по ${money(r.avg_price, r.currency, true)} на аккаунте <b>${esc(r.account)}</b>.</p>
           <p>Продажа от ${date(r.sale_date)} по ${money(r.sale_price, r.currency)} будет удалена, прибыль по ней
           (${r.profit > 0 ? "+" : ""}${money(r.profit, r.currency)}) исчезнет из статистики.<br>
           <span class="muted small">Продажа удаляется насовсем — вернуть её можно, только внеся заново.</span></p></div>` }],

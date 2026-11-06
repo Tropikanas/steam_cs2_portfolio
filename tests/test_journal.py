@@ -5,7 +5,6 @@ import pytest
 
 from steamfolio.currencies import Currency
 from steamfolio.journal import JournalError
-from steamfolio.ledger import Position, RowKey
 
 RUB, USD, CNY = Currency.RUB, Currency.USD, Currency.CNY
 CASE = "Kilowatt Case"
@@ -13,11 +12,11 @@ D = date.fromisoformat
 
 
 def pos(journal, acc, currency=RUB, item=CASE):
-    key = RowKey(item, acc, currency)
-    return journal.ledger().positions.get(key) or Position(key)
+    """Все строки (покупки) предмета в валюте на аккаунте вместе."""
+    return journal.ledger().total(item, acc, currency)
 
 
-# ---------- покупки, продажи, средняя цена ----------
+# ---------- покупки, продажи, строки ----------
 
 def test_tz_example_buy_1000_sell_2000(journal, acc):
     """ТЗ: купил за 1000 ₽, продал за 2000 ₽ — позиции нет, +1000 вложено, +2000 продано, +1000 прибыли."""
@@ -35,25 +34,24 @@ def test_tz_example_buy_1000_sell_2000(journal, acc):
     assert ledger.profit_usd == 1250
 
 
-def test_average_price_is_weighted_and_sale_does_not_change_it(journal, acc):
-    journal.buy(CASE, acc, RUB, 10, 10000, D("2026-01-10"))
-    journal.buy(CASE, acc, RUB, 10, 20000, D("2026-01-11"))
-    assert pos(journal, acc).avg_price == 15000
-    journal.sell(CASE, acc, RUB, 5, 30000, D("2026-01-12"))
-    p = pos(journal, acc)
-    assert p.quantity == 15
-    assert p.avg_price == 15000
-    assert journal.ledger().sales[0].profit == (30000 - 15000) * 5
+def test_each_purchase_is_its_own_row_and_sale_uses_its_price(journal, acc):
+    first = journal.buy(CASE, acc, RUB, 10, 10000, D("2026-01-10"))
+    second = journal.buy(CASE, acc, RUB, 10, 20000, D("2026-01-11"))
+    ledger = journal.ledger()
+    assert sorted((p.key.lot, p.quantity, p.avg_price) for p in ledger.open_positions) == \
+        [(first, 10, 10000), (second, 10, 20000)]  # строки не складываются
+    journal.sell(second, 5, 30000, D("2026-01-12"))  # продажа — из конкретной строки
+    ledger = journal.ledger()
+    assert ledger.sales[0].profit == (30000 - 20000) * 5
+    assert ledger.lot(second).quantity == 5 and ledger.lot(first).quantity == 10
+    assert pos(journal, acc).quantity == 15
 
 
 def test_profit_in_usd_uses_rates_of_purchase_and_sale_dates(journal, fx, acc):
-    fx.by_date[(RUB, D("2026-01-10"))] = Decimal(80)
-    fx.by_date[(RUB, D("2026-01-11"))] = Decimal(90)
+    fx.by_date[(RUB, D("2026-01-10"))] = Decimal(85)
     fx.by_date[(RUB, D("2026-03-01"))] = Decimal(100)
-    journal.buy(CASE, acc, RUB, 1, 800000, D("2026-01-10"))  # $100
-    journal.buy(CASE, acc, RUB, 1, 900000, D("2026-01-11"))  # $100
-    assert pos(journal, acc).avg_price_usd == 10000
-    journal.sell(CASE, acc, RUB, 2, 1000000, D("2026-03-01"))  # выручка $200
+    lot = journal.buy(CASE, acc, RUB, 2, 850000, D("2026-01-10"))  # 17 000 ₽ = $200
+    journal.sell(lot, 2, 1000000, D("2026-03-01"))  # выручка 20 000 ₽ = $200
     sale = journal.ledger().sales[0]
     assert sale.profit == 2 * (1000000 - 850000)  # 3000 ₽ в рублях
     assert sale.profit_usd == 0  # а в долларах ноль: рубль подешевел
@@ -73,8 +71,8 @@ def test_rows_are_split_by_account_and_currency(journal, acc, acc2):
     journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-01"))
     journal.buy(CASE, acc2, RUB, 2, 2000, D("2026-01-01"))
     journal.buy(CASE, acc, CNY, 3, 100, D("2026-01-01"))
-    keys = {p.key: p.quantity for p in journal.ledger().open_positions}
-    assert keys == {RowKey(CASE, acc, RUB): 1, RowKey(CASE, acc2, RUB): 2, RowKey(CASE, acc, CNY): 3}
+    keys = {p.key[:3]: p.quantity for p in journal.ledger().open_positions}
+    assert keys == {(CASE, acc, RUB): 1, (CASE, acc2, RUB): 2, (CASE, acc, CNY): 3}
 
 
 def test_months_held(journal, acc):
@@ -84,20 +82,19 @@ def test_months_held(journal, acc):
 
 
 def test_cannot_sell_more_than_owned(journal, acc):
-    journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-01"))
+    lot = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-01"))
     with pytest.raises(JournalError, match="при остатке 1"):
-        journal.sell(CASE, acc, RUB, 2, 1000, D("2026-01-02"))
-    with pytest.raises(JournalError, match="при остатке 0"):  # продажа раньше покупки
-        journal.sell(CASE, acc, RUB, 1, 1000, D("2025-12-31"))
+        journal.sell(lot, 2, 1000, D("2026-01-02"))
+    with pytest.raises(JournalError, match="строки"):  # продажа раньше покупки — строки тогда ещё не было
+        journal.sell(lot, 1, 1000, D("2025-12-31"))
 
 
-def test_backdated_purchase_changes_profit_of_later_sale(journal, acc):
-    journal.buy(CASE, acc, RUB, 1, 10000, D("2026-01-10"))
-    journal.sell(CASE, acc, RUB, 1, 20000, D("2026-02-01"))
-    journal.buy(CASE, acc, RUB, 1, 30000, D("2026-01-15"))  # внесена позже, но датирована до продажи
+def test_backdated_purchase_is_a_separate_row(journal, acc):
+    lot = journal.buy(CASE, acc, RUB, 1, 10000, D("2026-01-10"))
+    journal.sell(lot, 1, 20000, D("2026-02-01"))
+    journal.buy(CASE, acc, RUB, 1, 30000, D("2026-01-15"))  # внесена позже, датирована до продажи — своя строка
     ledger = journal.ledger()
-    assert ledger.sales[0].avg_price == 20000
-    assert ledger.sales[0].profit == 0
+    assert (ledger.sales[0].avg_price, ledger.sales[0].profit) == (10000, 10000)  # прошлая продажа не меняется
     assert pos(journal, acc).quantity == 1
 
 
@@ -174,9 +171,9 @@ def test_transferred_row_is_an_editable_buy(journal, fx, acc, acc2):
     journal.buy(CASE, acc, RUB, 100, 1000, D("2026-01-10"))
     moved = journal.transfer(CASE, acc, acc2, RUB, 30, comment="на второй")
     buy = _arrival(journal, moved)
-    # покупка на новом аккаунте: средняя цена, дата первой покупки и курс исходной строки
-    assert (buy.account_id, buy.quantity, buy.price, buy.op_date, buy.fx_rate, buy.fx_source, buy.comment) == \
-        (acc2, 30, 1000, D("2026-01-10"), Decimal(100), "transfer", "на второй")
+    # покупка на новом аккаунте: цена, дата покупки и курс исходной строки
+    assert (buy.account_id, buy.quantity, buy.price, buy.op_date, buy.fx_rate, buy.comment) == \
+        (acc2, 30, 1000, D("2026-01-10"), Decimal(100), "на второй")
     assert journal.ledger().invested_usd == 1000  # перенос не покупка: «Всего вложено» то же
     # правится как любая покупка — исходная строка не меняется
     journal.edit(buy.id, price=1200, currency=USD)
@@ -280,25 +277,17 @@ def test_editing_fill_does_not_touch_order(journal, acc, acc2):
     assert pos(journal, acc2, USD).quantity == 7 and pos(journal, acc).quantity == 0
 
 
-def row_comment(conn, item, account_id, currency=RUB):
-    row = conn.execute("SELECT comment FROM position_comments WHERE market_hash_name = ? AND account_id = ? AND currency = ?",
-                       (item, account_id, int(currency))).fetchone()
-    return row["comment"] if row else None
-
-
-def test_order_comment_goes_to_portfolio_row(conn, journal, acc):
-    # Комментарий ордера переходит в строку портфеля; при следующих покупках по ордерам — через «; ».
+def test_each_order_fill_is_its_own_row_with_order_comment(journal, acc):
+    # Каждая покупка по ордеру — отдельная строка с комментарием ордера.
     first = journal.place_order(CASE, acc, RUB, 10, 5000, comment="под мажор")
-    journal.fill_order(first, quantity=4)
-    assert row_comment(conn, CASE, acc) == "под мажор"
-    journal.fill_order(first)  # тот же комментарий второй раз не дописывается
-    assert row_comment(conn, CASE, acc) == "под мажор"
+    a = journal.fill_order(first, quantity=4)
+    b = journal.fill_order(first)
     second = journal.place_order(CASE, acc, RUB, 5, 4000, comment="докупка на просадке")
-    journal.fill_order(second, quantity=5)
-    assert row_comment(conn, CASE, acc) == "под мажор; докупка на просадке"
-    quiet = journal.place_order(CASE, acc, RUB, 1, 4000)
-    journal.fill_order(quiet)  # без комментария — строка не меняется
-    assert row_comment(conn, CASE, acc) == "под мажор; докупка на просадке"
+    c = journal.fill_order(second, quantity=5)
+    quiet = journal.fill_order(journal.place_order(CASE, acc, RUB, 1, 4000))
+    rows = {p.key.lot: p.quantity for p in journal.ledger().open_positions}
+    assert rows == {a: 4, b: 6, c: 5, quiet: 1}
+    assert [journal.op(i).comment for i in (a, b, c, quiet)] == ["под мажор", "под мажор", "докупка на просадке", ""]
 
 
 # ---------- изменение и удаление ----------

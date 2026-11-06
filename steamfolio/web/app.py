@@ -85,27 +85,24 @@ class TradeIn(BaseModel):
     fx_rate: str | None = None
 
 
-class TransferIn(BaseModel):
-    item: str
-    from_account_id: int
-    to_account_id: int
-    currency: str
+class SellIn(BaseModel):
+    lot_id: int  # строка портфеля (её покупка), из которой продано
     quantity: int
+    price: str
     date: Date | None = None
+    comment: str = ""
+    fx_rate: str | None = None
+
+
+class TransferIn(BaseModel):
+    lot_id: int
+    to_account_id: int
+    quantity: int
     comment: str = ""
 
 
-class RemovePositionIn(BaseModel):
-    item: str
-    account_id: int
-    currency: str
-
-
-class CommentIn(BaseModel):
-    item: str
-    account_id: int
-    currency: str
-    comment: str
+class LotIn(BaseModel):
+    lot_id: int
 
 
 class OrderIn(BaseModel):
@@ -335,47 +332,20 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         return {"op_id": op_id}
 
     @app.post("/api/sell")
-    def sell(body: TradeIn, conn: Conn, user: User) -> dict[str, Any]:
-        op_id = journal(conn, user).sell(body.item, body.account_id, currency(body.currency), body.quantity,
-                                         money(body.price), body.date, body.comment.strip(), rate(body.fx_rate))
+    def sell(body: SellIn, conn: Conn, user: User) -> dict[str, Any]:
+        op_id = journal(conn, user).sell(body.lot_id, body.quantity, money(body.price), body.date,
+                                         body.comment.strip(), rate(body.fx_rate))
         return {"op_id": op_id}
 
     @app.post("/api/transfer")
     def transfer(body: TransferIn, conn: Conn, user: User) -> dict[str, Any]:
-        cur = currency(body.currency)
-        comment = body.comment.strip()
-        op_id = journal(conn, user).transfer(body.item, body.from_account_id, body.to_account_id,
-                                             cur, body.quantity, body.date, comment)
-        if comment:  # комментарий строки (по умолчанию — исходной) переезжает в новую строку
-            with conn:
-                conn.execute(
-                    """INSERT INTO position_comments (portfolio_id, market_hash_name, account_id, currency, comment)
-                       VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET comment = excluded.comment""",
-                    (PORTFOLIO_ID, body.item, body.to_account_id, int(cur), comment[:500]),
-                )
+        # Комментарий новой строки — из формы (по умолчанию — комментарий исходной строки).
+        op_id = journal(conn, user).transfer(body.lot_id, body.to_account_id, body.quantity, body.comment.strip()[:500])
         return {"op_id": op_id}
 
     @app.post("/api/remove-position")
-    def remove_position(body: RemovePositionIn, conn: Conn, user: User) -> dict[str, Any]:
-        return {"removed": journal(conn, user).remove_position(body.item, body.account_id, currency(body.currency))}
-
-    @app.post("/api/position-comment")
-    def position_comment(body: CommentIn, conn: Conn, user: User) -> dict[str, Any]:
-        cur = currency(body.currency)
-        with conn:
-            if body.comment.strip():
-                conn.execute(
-                    """INSERT INTO position_comments (portfolio_id, market_hash_name, account_id, currency, comment)
-                       VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET comment = excluded.comment""",
-                    (PORTFOLIO_ID, body.item, body.account_id, int(cur), body.comment.strip()[:500]),
-                )
-            else:
-                conn.execute(
-                    """DELETE FROM position_comments
-                       WHERE portfolio_id = ? AND market_hash_name = ? AND account_id = ? AND currency = ?""",
-                    (PORTFOLIO_ID, body.item, body.account_id, int(cur)),
-                )
-        return {"ok": True}
+    def remove_position(body: LotIn, conn: Conn, user: User) -> dict[str, Any]:
+        return {"removed": journal(conn, user).remove_position(body.lot_id)}
 
     # ---------- API: ордера ----------
 

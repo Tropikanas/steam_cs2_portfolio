@@ -34,14 +34,14 @@ def test_series_value_and_invested(conn, journal, acc):
     run_with_prices(conn, "2026-09-28T06:00:00+00:00", {(CASE, USD): 12})
     journal.buy(CASE, acc, RUB, 10, 1600, D("2026-09-29"))  # ещё $2.00
     run_with_prices(conn, "2026-09-29T06:00:00+00:00", {(CASE, USD): 15})
-    journal.sell(CASE, acc, RUB, 5, 2000, D("2026-09-30"))  # себестоимость проданного $0.75
+    journal.sell(CASE, acc, RUB, 5, 2000, D("2026-09-30"))  # из первой строки: себестоимость проданного $0.50
     run_with_prices(conn, "2026-09-30T06:00:00+00:00", {(CASE, USD): 20})
 
     s = stats.series(conn, journal.ops(), now=datetime(2026, 9, 30, 6, tzinfo=UTC))
     assert s["launch"] == "2026-09-28"
     assert s["value_estimate"] == []
     assert [y for _, y in s["value"]] == [1.2, 3.0, 3.0]  # 10×12¢, 20×15¢, 15×20¢
-    assert [y for _, y in s["invested"]] == [1.0, 3.0, 2.25]
+    assert [y for _, y in s["invested"]] == [1.0, 3.0, 2.5]
 
 
 def test_series_adds_current_point_after_last_run(conn, journal, acc):
@@ -196,30 +196,29 @@ def test_removal_follows_transfer_to_source_account(journal, acc, acc2):
     assert daily_holdings(journal.ops()) == []  # на графике их не было никогда
 
 
-def test_removal_takes_latest_purchases_first(journal, acc):
+def test_removal_erases_only_its_row(journal, acc):
     from steamfolio.ledger import daily_holdings
 
     journal.buy(CASE, acc, RUB, 500, 8000, D("2026-09-01"))  # остаётся
-    journal.buy(CASE, acc, RUB, 1200, 8000, D("2026-09-20"))  # будет удалена
-    journal.sell(CASE, acc, RUB, 1700, 8000, D("2026-09-25"))  # всё продали...
-    journal.buy(CASE, acc, RUB, 300, 8000, D("2026-09-26"))
-    journal.remove_position(CASE, acc, RUB)  # ...а удалены только 300 после продажи
-    by_day = {day: {k.market_hash_name: v[0] for k, v in state.items()} for day, state in daily_holdings(journal.ops())}
-    assert by_day[D("2026-09-01")] == {CASE: 500}
-    assert by_day[D("2026-09-20")] == {CASE: 1700}
+    sold = journal.buy(CASE, acc, RUB, 1200, 8000, D("2026-09-20"))
+    journal.sell(sold, 1200, 8000, D("2026-09-25"))  # эту строку продали целиком
+    removed = journal.buy(CASE, acc, RUB, 300, 8000, D("2026-09-26"))
+    journal.remove_position(removed)  # удалена только эта строка
+    by_day = {day: sum(v[0] for v in state.values()) for day, state in daily_holdings(journal.ops())}
+    assert (by_day[D("2026-09-01")], by_day[D("2026-09-20")], by_day[D("2026-09-25")]) == (500, 1700, 500)
     assert D("2026-09-26") not in by_day  # удалённая покупка — как не было
 
 
-def test_removal_does_not_take_already_removed_purchase(journal, acc):
+def test_removed_rows_leave_nothing_on_chart(journal, acc):
     # 1200 внесены и удалены; потом задним числом внесены 500 и тоже удалены — на графике не остаётся ничего.
-    from steamfolio.ledger import daily_holdings, without_removed
+    from steamfolio.ledger import daily_holdings
 
     journal.buy(CASE, acc, RUB, 1200, 8000, D("2026-09-20"))
     journal.remove_position(CASE, acc, RUB)
     journal.buy(CASE, acc, RUB, 500, 8000, D("2026-09-01"))
     journal.remove_position(CASE, acc, RUB)
     journal.buy(AK, acc, USD, 3, 1000, D("2026-09-25"))
-    assert [op.kind for op in without_removed(journal.ops())] == ["buy"]
+    assert [op.kind for op in journal.ops()] == ["buy"]
     assert [(day, {k.market_hash_name: v[0] for k, v in state.items()}) for day, state in daily_holdings(journal.ops())] \
         == [(D("2026-09-25"), {AK: 3})]
 

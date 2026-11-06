@@ -1,9 +1,9 @@
 """Пересчёт портфеля и прибыли из записей покупок, продаж и переносов.
 
 Чистые функции без базы: на вход — все записи портфеля, на выход — состояние.
-Записи правятся и удаляются на месте (истории правок нет); порядок пересчёта — по дате сделки,
-внутри дня — по порядку ввода. «Позиция удалена» в базе не хранится: так называется план удаления,
-который превращается в уменьшение и удаление покупок (removal_matches).
+Каждая покупка — своя строка портфеля; продажа и перенос списывают штуки с конкретной строки
+(target_id продажи, payload["lot"] переноса). Записи правятся и удаляются на месте; порядок пересчёта —
+по дате сделки, внутри дня — по порядку ввода.
 
 Деньги — Decimal в сотых долях валюты (копейки, центы), курсы — единиц валюты за 1 USD.
 """
@@ -100,29 +100,24 @@ class Op:
 
 
 class RowKey(NamedTuple):
-    """Строка портфеля: предмет в одной валюте на одном аккаунте."""
+    """Строка портфеля — одна покупка (lot — её id): предмет в одной валюте на одном аккаунте.
+    Покупки не складываются в одну строку; «Объединить строки» на сайте — только просмотр итогами."""
 
     market_hash_name: str
     account_id: int
     currency: Currency
+    lot: int | None = None
 
 
 @dataclass
 class Position:
     key: RowKey
-    quantity: int = 0
+    quantity: int = 0  # сколько осталось из этой покупки
     cost: Decimal = Decimal(0)  # себестоимость остатка в валюте строки
-    cost_usd: Decimal = Decimal(0)  # она же по курсам на даты покупок
-    first_buy_date: date | None = None  # с последнего открытия позиции с нуля
-    # С последнего открытия с нуля: были ли продажи или переносы на другой аккаунт,
-    # и закрыта ли позиция удалением. Удалённая без продаж и переносов — не «закрытая», её будто не было.
-    exited: bool = False
-    removed: bool = False
-
-    def reopen(self, day: date) -> None:
-        self.cost = self.cost_usd = Decimal(0)
-        self.first_buy_date = day
-        self.exited = self.removed = False
+    cost_usd: Decimal = Decimal(0)  # она же по курсу на дату покупки
+    first_buy_date: date | None = None  # дата покупки
+    bought: int = 0  # сколько куплено этой покупкой
+    exited: bool = False  # было продано или перенесено
 
     @property
     def avg_price(self) -> Decimal | None:
@@ -137,7 +132,7 @@ class Position:
 class Sale:
     op_id: int
     op_date: date
-    key: RowKey
+    key: RowKey  # строка (покупка), из которой продано
     quantity: int
     price: int
     avg_price: Decimal
@@ -145,8 +140,8 @@ class Sale:
     revenue_usd: Decimal
     profit: Decimal  # в валюте строки
     profit_usd: Decimal
-    profit_pct: Decimal  # цена продажи / средняя − 1, в процентах
-    months: Decimal  # от самой ранней даты покупки позиции до продажи
+    profit_pct: Decimal  # цена продажи / цена покупки − 1, в процентах
+    months: Decimal  # от даты покупки до продажи
     first_buy_date: date | None = None
 
     @property
@@ -174,6 +169,7 @@ class Ledger:
     invested_usd: Decimal = Decimal(0)  # все покупки по курсу на дату покупки
     sold_usd: Decimal = Decimal(0)  # все продажи по курсу на дату продажи
     profit_usd: Decimal = Decimal(0)  # сумма прибыли по всем продажам
+    lots: dict[int, RowKey] = field(default_factory=dict)  # id покупки → её строка
 
     @property
     def open_positions(self) -> list[Position]:
@@ -181,12 +177,34 @@ class Ledger:
 
     @property
     def closed_positions(self) -> list[Position]:
-        """Проданные или перенесённые целиком; удалённые как ошибочные сюда не входят."""
-        return [p for p in self.positions.values() if p.quantity == 0 and not (p.removed and not p.exited)]
+        """Строки, проданные или перенесённые целиком."""
+        return [p for p in self.positions.values() if p.quantity == 0 and p.exited]
+
+    def lot(self, lot_id: int | None) -> Position | None:
+        key = self.lots.get(lot_id)
+        return self.positions.get(key) if key else None
+
+    def total(self, item: str, account_id: int, currency: Currency) -> Position:
+        """Все строки предмета в валюте на аккаунте вместе (для проверок и тестов)."""
+        key = RowKey(item, account_id, currency)
+        lots = [p for p in self.positions.values() if p.key[:3] == key[:3]]
+        return Position(key, sum(p.quantity for p in lots), sum((p.cost for p in lots), Decimal(0)),
+                        sum((p.cost_usd for p in lots), Decimal(0)),
+                        min((p.first_buy_date for p in lots if p.quantity), default=None),
+                        sum(p.bought for p in lots), any(p.exited for p in lots))
+
+
+def lot_of(op: Op) -> int | None:
+    """Из какой строки (покупки) продажа или перенос."""
+    if op.kind == "sell":
+        return op.target_id
+    if op.kind == "transfer":
+        return (op.payload or {}).get("lot")
+    return op.id if op.kind == "buy" else None
 
 
 def effective_ops(ops: list[Op]) -> list[Op]:
-    """Действующие записи. Перенос — пара «списание с аккаунта» + «покупка на новом аккаунте»:
+    """Действующие записи. Перенос — пара «списание со строки» + «покупка на новом аккаунте»:
     без одной половины нет и другой (удаление покупки отменяет перенос целиком)."""
     result = list(ops)
     splits = {op.id for op in result if is_split_transfer(op)}
@@ -196,7 +214,7 @@ def effective_ops(ops: list[Op]) -> list[Op]:
 
 
 def is_split_transfer(op: Op) -> bool:
-    """Перенос нового вида: только списывает с исходного аккаунта, на новый приходит связанная покупка."""
+    """Перенос: списывает штуки со строки исходного аккаунта, на новый приходит связанная покупка."""
     return op.kind == "transfer" and bool((op.payload or {}).get("split"))
 
 
@@ -215,71 +233,10 @@ def replay(ops: list[Op]) -> Ledger:
 Holding = tuple[int, Decimal, Decimal]  # (количество, себестоимость в USD, себестоимость в валюте строки)
 
 
-def removal_matches(ops: list[Op]) -> tuple[list[Op], dict[int, int], set[int]]:
-    """План удаления позиций: (записи в порядке пересчёта, {id поступления: снять штук}, id удалений).
-
-    ops — записи плюс «позиция удалена» (их в базе нет, это запрос на удаление). Удалённая позиция —
-    ошибочно внесённые штуки: последние пришедшие в строку (покупки, переносы на этот аккаунт).
-    Пришедшие переносом снимаются и с исходного аккаунта, а перенос уменьшается на столько же.
-    """
-    ledger, timeline = _prepare(ops)
-    valid: list[int] = []
-    for index, op in enumerate(timeline):
-        problems = len(ledger.violations)
-        _apply(ledger, op)
-        if op.kind == "position_removed" and len(ledger.violations) == problems:
-            valid.append(index)
-    taken: dict[int, int] = {}
-    position = {op.id: i for i, op in enumerate(timeline)}
-
-    def take(index: int, key: RowKey, count: int) -> None:
-        for i in range(index - 1, -1, -1):
-            if count <= 0:
-                return
-            op = timeline[i]
-            if not _brings_into(op, key):
-                continue
-            got = min(count, op.quantity - taken.get(op.id, 0))
-            if got <= 0:
-                continue
-            taken[op.id] = taken.get(op.id, 0) + got
-            if op.kind == "transfer":
-                take(i, RowKey(op.market_hash_name, op.account_id, op.currency), got)
-            elif is_transfer_buy(op) and op.target_id in position:
-                # Привезены переносом: до переноса эти штуки были на исходном аккаунте — снимаем и там,
-                # а перенос становится меньше на столько же.
-                t = position[op.target_id]
-                moved = timeline[t]
-                taken[moved.id] = taken.get(moved.id, 0) + got
-                take(t, RowKey(moved.market_hash_name, moved.account_id, moved.currency), got)
-            count -= got
-
-    for index in valid:
-        op = timeline[index]
-        take(index, RowKey(op.market_hash_name, op.account_id, op.currency), op.quantity)
-    return timeline, taken, {timeline[index].id for index in valid}
-
-
-def without_removed(ops: list[Op]) -> list[Op]:
-    """Записи после выполнения плана удаления: снятые штуки вычтены из своих поступлений, удаления убраны."""
-    _, taken, removals = removal_matches(ops)
-    result = []
-    for op in effective_ops(ops):
-        if op.id in removals:
-            continue
-        if op.id in taken:
-            if op.quantity <= taken[op.id]:
-                continue
-            op = replace(op, quantity=op.quantity - taken[op.id])
-        result.append(op)
-    return result
-
-
 def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
     """Остатки на конец каждого дня с операциями: [(дата, {строка: (количество, себестоимость USD, в валюте)})].
 
-    Удалённые позиции стёрты из самих записей, поэтому их нет и в прошлом.
-    Покупка, привезённая переносом, датирована первой покупкой исходной строки, но до переноса эти штуки
+    Покупка, привезённая переносом, датирована покупкой исходной строки, но до переноса эти штуки
     лежали на исходном аккаунте — на графике она приходит в день переноса, иначе штуки посчитались бы дважды.
     """
     clean = effective_ops(ops)
@@ -301,22 +258,14 @@ def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
     return result
 
 
-def _brings_into(op: Op, key: RowKey) -> bool:
-    """Запись добавляет штуки в строку key: покупка (в том числе привезённая переносом)."""
-    if op.market_hash_name != key.market_hash_name or op.currency != key.currency:
-        return False
-    return op.kind == "buy" and op.account_id == key.account_id
-
-
 def _prepare(ops: list[Op]) -> tuple[Ledger, list[Op]]:
     current = effective_ops(ops)
     return Ledger(), sorted(current, key=timeline_key(current))
 
 
 def timeline_key(current: list[Op]) -> Callable[[Op], tuple]:
-    """Порядок пересчёта: по дате, внутри дня — по вводу. Покупка, привезённая переносом, датирована первой
-    покупкой исходной строки, но применяется сразу после переноса — иначе она смешалась бы с прежней
-    историей строки на новом аккаунте (продажами и удалениями до переноса)."""
+    """Порядок пересчёта: по дате, внутри дня — по вводу. Покупка, привезённая переносом, датирована
+    покупкой исходной строки, но применяется сразу после переноса (до него этих штук на аккаунте не было)."""
     transfers = {op.id: op for op in current if is_split_transfer(op)}
 
     def key(op: Op) -> tuple:
@@ -328,68 +277,48 @@ def timeline_key(current: list[Op]) -> Callable[[Op], tuple]:
     return key
 
 
-def timeline_order(ops: list[Op]) -> list[Op]:
-    """Действующие операции в порядке пересчёта (см. timeline_key)."""
-    current = effective_ops(ops)
-    return sorted(current, key=timeline_key(current))
-
-
 def _apply(ledger: Ledger, op: Op) -> None:
     if op.kind == "sell":
         _sell(ledger, op)
     elif op.kind == "transfer":
         _transfer(ledger, op)
-    elif op.kind == "position_removed":
-        _remove(ledger, op)
-    else:
+    elif op.kind == "buy":
         _buy(ledger, op)
 
 
 def _buy(ledger: Ledger, op: Op) -> None:
-    key = RowKey(op.market_hash_name, op.account_id, op.currency)
-    pos = ledger.positions.setdefault(key, Position(key))
-    if pos.quantity == 0:
-        pos.reopen(op.op_date)
-    elif is_transfer_buy(op):  # привезено в открытую строку — первая покупка самая ранняя из двух, как раньше
-        pos.first_buy_date = min(pos.first_buy_date, op.op_date)
+    key = RowKey(op.market_hash_name, op.account_id, op.currency, op.id)
     amount = Decimal(op.quantity * op.price)
     amount_usd = amount / op.fx_rate
-    pos.quantity += op.quantity
-    pos.cost += amount
-    pos.cost_usd += amount_usd
+    ledger.lots[op.id] = key
+    ledger.positions[key] = Position(key, op.quantity, amount, amount_usd, op.op_date, op.quantity)
     ledger.invested_usd += amount_usd
 
 
+def _source(ledger: Ledger, op: Op, what: str) -> Position | None:
+    """Строка, из которой продают или переносят; нет её или не хватает штук — нарушение."""
+    pos = ledger.lot(lot_of(op))
+    have = pos.quantity if pos else 0
+    if pos is None or op.quantity > have:
+        place = f"«{op.market_hash_name}» {op.op_date:%d.%m.%Y}"
+        message = (f"{what} {op.quantity} шт. {place}: строки, из которой {what}, нет" if pos is None
+                   else f"{what} {op.quantity} шт. {place} при остатке {have} шт.")
+        ledger.violations.append(Violation(op.id, message))
+        return None
+    return pos
+
+
 def _transfer(ledger: Ledger, op: Op) -> None:
-    """Перенос части строки на другой аккаунт: себестоимость переезжает по средней цене, прибыли нет."""
-    src_key = RowKey(op.market_hash_name, op.account_id, op.currency)
-    src = ledger.positions.get(src_key)
-    have = src.quantity if src else 0
-    if op.quantity > have:
-        ledger.violations.append(
-            Violation(op.id, f"перенос {op.quantity} шт. «{op.market_hash_name}» {op.op_date:%d.%m.%Y} при остатке {have} шт.")
-        )
+    """Перенос части строки на другой аккаунт: списание по цене покупки (её принесёт связанная покупка)."""
+    src = _source(ledger, op, "перенос")
+    if src is None:
         return
     avg, avg_usd = src.avg_price, src.avg_price_usd
-    if is_split_transfer(op):
-        # Списание по средней цене; себестоимость на новом аккаунте принесла связанная покупка.
-        ledger.invested_usd -= avg_usd * op.quantity
-        _take_out(src, op.quantity, avg, avg_usd)
-        return
-    dst_key = RowKey(op.market_hash_name, op.to_account_id, op.currency)
-    dst = ledger.positions.setdefault(dst_key, Position(dst_key))
-    if dst.quantity == 0:
-        dst.reopen(src.first_buy_date)
-    else:
-        dst.first_buy_date = min(dst.first_buy_date, src.first_buy_date)
-    dst.quantity += op.quantity
-    dst.cost += avg * op.quantity
-    dst.cost_usd += avg_usd * op.quantity
+    ledger.invested_usd -= avg_usd * op.quantity
     _take_out(src, op.quantity, avg, avg_usd)
 
 
 def _take_out(src: Position, quantity: int, avg: Decimal, avg_usd: Decimal) -> None:
-    """Штуки ушли с аккаунта переносом: остаток — по прежней средней цене."""
     src.quantity -= quantity
     src.exited = True
     if src.quantity == 0:
@@ -399,38 +328,9 @@ def _take_out(src: Position, quantity: int, avg: Decimal, avg_usd: Decimal) -> N
         src.cost_usd -= avg_usd * quantity
 
 
-def _remove(ledger: Ledger, op: Op) -> None:
-    """Удаление позиции как ошибочно внесённой: остаток уходит по средней цене, будто его не покупали.
-
-    «Всего вложено» уменьшается на его себестоимость в USD, прибыли и убытка нет.
-    """
-    key = RowKey(op.market_hash_name, op.account_id, op.currency)
-    pos = ledger.positions.get(key)
-    have = pos.quantity if pos else 0
-    if op.quantity > have:
-        ledger.violations.append(
-            Violation(op.id, f"удаление {op.quantity} шт. «{op.market_hash_name}» {op.op_date:%d.%m.%Y} при остатке {have} шт.")
-        )
-        return
-    avg, avg_usd = pos.avg_price, pos.avg_price_usd
-    ledger.invested_usd -= avg_usd * op.quantity
-    pos.quantity -= op.quantity
-    if pos.quantity == 0:
-        pos.cost = pos.cost_usd = Decimal(0)
-        pos.removed = True
-    else:
-        pos.cost -= avg * op.quantity
-        pos.cost_usd -= avg_usd * op.quantity
-
-
 def _sell(ledger: Ledger, op: Op) -> None:
-    key = RowKey(op.market_hash_name, op.account_id, op.currency)
-    pos = ledger.positions.get(key)
-    have = pos.quantity if pos else 0
-    if op.quantity > have:
-        ledger.violations.append(
-            Violation(op.id, f"продажа {op.quantity} шт. «{op.market_hash_name}» {op.op_date:%d.%m.%Y} при остатке {have} шт.")
-        )
+    pos = _source(ledger, op, "продажа")
+    if pos is None:
         return
     avg, avg_usd = pos.avg_price, pos.avg_price_usd
     revenue_usd = Decimal(op.quantity * op.price) / op.fx_rate
@@ -441,7 +341,7 @@ def _sell(ledger: Ledger, op: Op) -> None:
         Sale(
             op_id=op.id,
             op_date=op.op_date,
-            key=key,
+            key=pos.key,
             quantity=op.quantity,
             price=op.price,
             avg_price=avg,
@@ -456,10 +356,6 @@ def _sell(ledger: Ledger, op: Op) -> None:
     )
     ledger.sold_usd += revenue_usd
     ledger.profit_usd += profit_usd
-    pos.quantity -= op.quantity
-    pos.exited = True
-    if pos.quantity == 0:
-        pos.cost = pos.cost_usd = Decimal(0)
-    else:
-        pos.cost -= avg * op.quantity
-        pos.cost_usd -= avg_usd * op.quantity
+    _take_out(pos, op.quantity, avg, avg_usd)
+
+

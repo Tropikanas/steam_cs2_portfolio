@@ -11,15 +11,13 @@ import json
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from steamfolio.clock import today_msk
 from steamfolio.currencies import USER_CURRENCIES, Currency
 from steamfolio.db import utcnow
 from steamfolio.fx import FxResolver
-from steamfolio.ledger import (
-    EDITABLE_FIELDS, Ledger, Op, RowKey, is_transfer_buy, removal_matches, replay,
-)
+from steamfolio.ledger import EDITABLE_FIELDS, Ledger, Op, is_transfer_buy, lot_of, replay
 
 # Временный id ещё не записанной операции: больше любого настоящего.
 PENDING_ID = 10**15
@@ -28,7 +26,6 @@ KIND_NAMES = {
     "buy": "покупка",
     "sell": "продажа",
     "transfer": "перенос на аккаунт",
-    "position_removed": "позиция удалена",
 }
 
 
@@ -104,76 +101,78 @@ class Journal:
                             rate, source, comment=comment))
 
     def sell(
-        self, item: str, account_id: int, currency: Currency, quantity: int, price: int,
+        self, lot_id: int, quantity: int, price: int,
         op_date: date | None = None, comment: str = "", fx_rate: Decimal | None = None,
     ) -> int:
-        """price — чистая цена за штуку после комиссии, в валюте строки."""
+        """Продажа из строки (покупки) lot_id. price — чистая цена за штуку после комиссии, в валюте строки."""
+        lot = self._lot(lot_id)
         op_date = op_date or today_msk()
-        self._check_trade(item, account_id, currency, quantity, price, op_date)
-        rate, source = self._rate(currency, op_date, fx_rate)
-        return self._add(Op(PENDING_ID, "sell", op_date, utcnow(), item, account_id, currency, quantity, price,
-                            rate, source, comment=comment))
+        self._check_trade(lot.market_hash_name, lot.account_id, lot.currency, quantity, price, op_date)
+        rate, source = self._rate(lot.currency, op_date, fx_rate)
+        return self._add(Op(PENDING_ID, "sell", op_date, utcnow(), lot.market_hash_name, lot.account_id, lot.currency,
+                            quantity, price, rate, source, target_id=lot_id, comment=comment))
 
-    def transfer(
-        self, item: str, from_account_id: int, to_account_id: int, currency: Currency, quantity: int,
-        op_date: date | None = None, comment: str = "",
-    ) -> int:
-        """Перенести часть строки на другой аккаунт: списание с исходного аккаунта по средней цене и обычная
-        покупка на новом — по той же средней цене, датой первой покупки исходной строки и с тем же курсом к USD.
-        Новую строку можно править как любую купленную; удаление этой покупки отменяет перенос целиком."""
+    def transfer(self, lot_id: int, to_account_id: int, quantity: int, comment: str = "",
+                 op_date: date | None = None) -> int:
+        """Перенести часть строки на другой аккаунт: списание из строки и новая строка на другом аккаунте —
+        покупка по той же цене, с той же датой и курсом к USD. Её можно править как любую покупку;
+        удаление этой покупки отменяет перенос целиком."""
+        lot = self._lot(lot_id)
         op_date = op_date or today_msk()
-        self._check_trade(item, from_account_id, currency, quantity, 0, op_date)
+        self._check_trade(lot.market_hash_name, lot.account_id, lot.currency, quantity, 0, op_date)
         self._check_account(to_account_id)
-        if to_account_id == from_account_id:
+        if to_account_id == lot.account_id:
             raise JournalError("аккаунты «откуда» и «куда» совпадают")
-        src = self.ledger().positions.get(RowKey(item, from_account_id, currency))
+        src = self.ledger().lot(lot_id)
         if src is None or src.quantity < quantity:
-            raise JournalError(f"перенос {quantity} шт. «{item}» при остатке {src.quantity if src else 0} шт.")
+            raise JournalError(f"перенос {quantity} шт. «{lot.market_hash_name}» при остатке {src.quantity if src else 0} шт.")
         now = utcnow()
-        out = Op(PENDING_ID, "transfer", op_date, now, item, from_account_id, currency, quantity,
-                 comment=comment, to_account_id=to_account_id, payload={"split": True})
-        price = int(src.avg_price.to_integral_value(ROUND_HALF_UP))
-        if src.avg_price_usd:
-            rate, source = src.avg_price / src.avg_price_usd, "transfer"
-        else:  # бесплатные предметы — курс на дату первой покупки
-            rate, source = self._rate(currency, src.first_buy_date, None)
-        arrival = Op(PENDING_ID + 1, "buy", src.first_buy_date, now, item, to_account_id, currency, quantity, price,
-                     rate, source, target_id=PENDING_ID, comment=comment)
+        out = Op(PENDING_ID, "transfer", op_date, now, lot.market_hash_name, lot.account_id, lot.currency, quantity,
+                 comment=comment, to_account_id=to_account_id, payload={"split": True, "lot": lot_id})
+        arrival = Op(PENDING_ID + 1, "buy", lot.op_date, now, lot.market_hash_name, to_account_id, lot.currency,
+                     quantity, lot.price, lot.fx_rate, lot.fx_source, target_id=PENDING_ID, comment=comment)
         return self._add_pair(out, arrival)
 
-    def remove_position(self, item: str, account_id: int, currency: Currency) -> int:
-        """Стереть весь текущий остаток строки как ошибочно внесённый: будто его не покупали.
-
-        Снимаются последние пришедшие в строку штуки — покупки уменьшаются или удаляются; пришедшие
-        переносом снимаются и с исходного аккаунта. Возвращает, сколько штук стёрто."""
-        pos = self.ledger().positions.get(RowKey(item, account_id, currency))
+    def remove_position(self, lot_id: int) -> int:
+        """Стереть остаток строки как ошибочно внесённый: покупка уменьшается на остаток (без продаж и
+        переносов — удаляется), будто его не покупали. Если строка привезена переносом, на столько же
+        уменьшается перенос и стирается остаток в исходной строке. Возвращает, сколько штук стёрто."""
+        pos = self.ledger().lot(lot_id)
         if pos is None or pos.quantity == 0:
-            raise JournalError(f"позиции «{item}» в {currency.name} на этом аккаунте нет")
+            raise JournalError("в этой строке ничего не осталось")
+        count = pos.quantity
         ops = self.ops()
-        request = Op(PENDING_ID, "position_removed", today_msk(), utcnow(), item, account_id, currency, pos.quantity)
-        _, taken, matched = removal_matches(ops + [request])
-        if PENDING_ID not in matched:
-            raise JournalError(f"не удалось найти покупки, из которых сложилась строка «{item}»")
-        after = [replace(op, quantity=op.quantity - taken.get(op.id, 0)) for op in ops
-                 if taken.get(op.id, 0) < op.quantity]
-        self._check(ops, after, "позиция не удалена")
         by_id = {op.id: op for op in ops}
+        cut: dict[int, int] = {}  # id записи → на сколько уменьшить
+        lot = by_id[lot_id]
+        while lot is not None:
+            cut[lot.id] = count
+            moved = by_id.get(lot.target_id) if is_transfer_buy(lot) else None
+            if moved is None:
+                break
+            cut[moved.id] = count  # перенос меньше на столько же, штуки «возвращаются» в исходную строку…
+            lot = by_id.get((moved.payload or {}).get("lot"))  # …и стираются там
+        after = [replace(op, quantity=op.quantity - cut.get(op.id, 0)) for op in ops
+                 if op.quantity > cut.get(op.id, 0)]
+        self._check(ops, after, "позиция не удалена")
         with self.conn:
             # Покупки — раньше переносов: привезённая покупка ссылается на свой перенос.
-            for op_id, count in sorted(taken.items(), key=lambda kv: by_id[kv[0]].kind != "buy"):
-                quantity = by_id[op_id].quantity
-                if count >= quantity:
+            for op_id, n in sorted(cut.items(), key=lambda kv: by_id[kv[0]].kind != "buy"):
+                if n >= by_id[op_id].quantity:
                     self.conn.execute("DELETE FROM operations WHERE id = ?", (op_id,))
                 else:
-                    self.conn.execute("UPDATE operations SET quantity = ? WHERE id = ?", (quantity - count, op_id))
-        return pos.quantity
+                    self.conn.execute("UPDATE operations SET quantity = ? WHERE id = ?", (by_id[op_id].quantity - n, op_id))
+        return count
 
     def edit(self, op_id: int, **changes) -> int:
-        """Изменить покупку или продажу на месте."""
+        """Изменить покупку или продажу на месте. У продажи предмет, аккаунт и валюта — от её строки;
+        если они меняются у покупки, продажи и переносы из этой строки меняются вместе с ней."""
         target = self._record(op_id)
         unknown = set(changes) - set(EDITABLE_FIELDS)
         if unknown:
             raise JournalError(f"нельзя изменить поля: {', '.join(sorted(unknown))}")
+        if target.kind == "sell" and {"market_hash_name", "account_id", "currency"} & set(changes):
+            raise JournalError("у продажи предмет, аккаунт и валюта — как у строки, из которой продано")
         if "currency" in changes:
             changes["currency"] = Currency(changes["currency"])
         if "fx_rate" in changes:
@@ -191,20 +190,23 @@ class Journal:
         if target.fields() == after.fields():
             raise JournalError("ничего не изменилось")
         ops = self.ops()
-        self._check(ops, [after if op.id == op_id else op for op in ops], f"{KIND_NAMES[target.kind]} не изменена")
+        same = {"market_hash_name": after.market_hash_name, "account_id": after.account_id, "currency": after.currency}
+        followers = [replace(op, **same) for op in ops if op.kind in ("sell", "transfer") and lot_of(op) == op_id]
+        changed = {op.id: op for op in [after, *followers]}
+        self._check(ops, [changed.get(op.id, op) for op in ops], f"{KIND_NAMES[target.kind]} не изменена")
         with self.conn:
-            self.conn.execute(
-                """UPDATE operations SET op_date = ?, market_hash_name = ?, account_id = ?, currency = ?, quantity = ?,
-                       price = ?, fx_rate = ?, fx_source = ?, comment = ? WHERE id = ?""",
-                (after.op_date.isoformat(), after.market_hash_name, after.account_id, int(after.currency),
-                 after.quantity, after.price, str(after.fx_rate) if after.fx_rate is not None else None,
-                 after.fx_source, after.comment, op_id),
-            )
+            for op in changed.values():
+                self.conn.execute(
+                    """UPDATE operations SET op_date = ?, market_hash_name = ?, account_id = ?, currency = ?,
+                           quantity = ?, price = ?, fx_rate = ?, fx_source = ?, comment = ? WHERE id = ?""",
+                    (op.op_date.isoformat(), op.market_hash_name, op.account_id, int(op.currency), op.quantity,
+                     op.price, str(op.fx_rate) if op.fx_rate is not None else None, op.fx_source, op.comment, op.id),
+                )
         return op_id
 
     def delete(self, op_id: int) -> int:
         """Удалить покупку или продажу. Покупка, привезённая переносом, удаляется вместе с переносом:
-        штуки возвращаются на исходный аккаунт."""
+        штуки возвращаются в исходную строку. Удалённая продажа возвращает штуки в свою строку."""
         target = self._record(op_id)
         gone = {op_id} | ({target.target_id} if is_transfer_buy(target) else set())
         ops = self.ops()
@@ -243,21 +245,20 @@ class Journal:
 
     def fill_order(self, order_id: int, quantity: int | None = None, op_date: date | None = None,
                    price: int | None = None, fx_rate: Decimal | None = None) -> int:
-        """Ордер куплен (весь — quantity=None — или частично): покупка в портфеле, ордер уменьшается или уходит.
-        Комментарий ордера дописывается в комментарий строки портфеля через «; »."""
+        """Ордер куплен (весь — quantity=None — или частично): новая строка в портфеле с комментарием ордера,
+        ордер уменьшается или уходит. Каждая покупка по ордеру — своя строка."""
         order = self._order(order_id)
         quantity = order.quantity if quantity is None else quantity
         if quantity > order.quantity:
             raise JournalError(f"куплено {quantity} шт. — больше, чем в ордере ({order.quantity} шт.)")
         op_id = self.buy(order.market_hash_name, order.account_id, order.currency, quantity,
-                         order.price if price is None else price, op_date, fx_rate=fx_rate)
+                         order.price if price is None else price, op_date, comment=order.comment.strip(),
+                         fx_rate=fx_rate)
         with self.conn:
             if quantity == order.quantity:
                 self.conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
             else:
                 self.conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (order.quantity - quantity, order_id))
-            if order.comment.strip():
-                self._append_row_comment(order.market_hash_name, order.account_id, order.currency, order.comment.strip())
         return op_id
 
     def remove_order(self, order_id: int) -> int:
@@ -265,22 +266,6 @@ class Journal:
         with self.conn:
             self.conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
         return order_id
-
-    def _append_row_comment(self, item: str, account_id: int, currency: Currency, text: str) -> None:
-        """Дописать в комментарий строки портфеля; тот же текст второй раз не повторяется."""
-        row = self.conn.execute(
-            """SELECT comment FROM position_comments
-               WHERE portfolio_id = ? AND market_hash_name = ? AND account_id = ? AND currency = ?""",
-            (self.portfolio_id, item, account_id, int(currency)),
-        ).fetchone()
-        parts = [p.strip() for p in (row["comment"] if row else "").split(";") if p.strip()]
-        if text in parts:
-            return
-        self.conn.execute(
-            """INSERT INTO position_comments (portfolio_id, market_hash_name, account_id, currency, comment)
-               VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET comment = excluded.comment""",
-            (self.portfolio_id, item, account_id, int(currency), "; ".join([*parts, text])[:500]),
-        )
 
     # ---------- внутреннее ----------
 
@@ -328,6 +313,13 @@ class Journal:
             ref = "новая запись" if v.op_id >= PENDING_ID else f"запись #{v.op_id} ({KIND_NAMES[self.op(v.op_id).kind]})"
             result.append(f"{ref}: {v.message}")
         return result
+
+    def _lot(self, lot_id: int) -> Op:
+        """Строка портфеля — её покупка."""
+        op = self.op(lot_id)
+        if op.kind != "buy":
+            raise JournalError(f"#{lot_id} — не строка портфеля")
+        return op
 
     def _record(self, op_id: int) -> Op:
         """Покупка или продажа, которую можно изменить или удалить."""

@@ -42,6 +42,10 @@ def test_login_and_lockout(client):
     assert client.get("/api/portfolio").status_code == 401
 
 
+def rows_of(client, closed=False):
+    return client.get(f"/api/portfolio?closed={'true' if closed else 'false'}").json()["rows"]
+
+
 def test_buy_transfer_and_order_flow(client):
     assert login(client).status_code == 303
     acc1 = client.post("/api/accounts", json={"name": "Основной"}).json()["id"]
@@ -53,20 +57,19 @@ def test_buy_transfer_and_order_flow(client):
     r = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc1, "currency": "RUB",
                                       "quantity": 100, "price": "9,45", "date": "2021-11-15"})
     assert r.status_code == 200, r.text
-    r = client.post("/api/transfer", json={"item": "Kilowatt Case", "from_account_id": acc1, "to_account_id": acc2,
-                                           "currency": "RUB", "quantity": 30})
+    lot = r.json()["op_id"]
+    r = client.post("/api/transfer", json={"lot_id": lot, "to_account_id": acc2, "quantity": 30})
     assert r.status_code == 200, r.text
-    rows = {row["account"]: row for row in client.get("/api/portfolio").json()["rows"]}
+    rows = {row["account"]: row for row in rows_of(client)}
     assert rows["Основной"]["quantity"] == 70 and rows["Твинк"]["quantity"] == 30
     assert rows["Твинк"]["avg_price"] == 9.45 and rows["Твинк"]["first_buy_date"] == "2021-11-15"
 
-    too_many = client.post("/api/sell", json={"item": "Kilowatt Case", "account_id": acc2, "currency": "RUB",
-                                              "quantity": 31, "price": "10"})
+    too_many = client.post("/api/sell", json={"lot_id": rows["Твинк"]["lot_id"], "quantity": 31, "price": "10"})
     assert too_many.status_code == 400 and too_many.json()["violations"]
 
-    assert client.post("/api/position-comment", json={"item": "Kilowatt Case", "account_id": acc2,
-                                                      "currency": "RUB", "comment": "Тест"}).status_code == 200
-    rows = {row["account"]: row for row in client.get("/api/portfolio").json()["rows"]}
+    # комментарий строки — комментарий её покупки
+    assert client.post(f"/api/ops/{rows['Твинк']['lot_id']}/edit", json={"comment": "Тест"}).status_code == 200
+    rows = {row["account"]: row for row in rows_of(client)}
     assert rows["Твинк"]["comment"] == "Тест"
 
     order = client.post("/api/orders", json={"item": "Kilowatt Case", "account_id": acc1, "currency": "RUB",
@@ -89,32 +92,51 @@ def test_edit_and_delete_records(client):
     acc = client.post("/api/accounts", json={"name": "Основной"}).json()["id"]
     trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
     buy = client.post("/api/buy", json={**trade, "quantity": 10, "price": "10", "date": "2026-01-10"}).json()["op_id"]
-    sale = client.post("/api/sell", json={**trade, "quantity": 4, "price": "15", "date": "2026-01-20"}).json()["op_id"]
+    sale = client.post("/api/sell", json={"lot_id": buy, "quantity": 4, "price": "15", "date": "2026-01-20"}).json()["op_id"]
     # покупку с продажей удалить нельзя — ошибка называет продажу
     r = client.post(f"/api/ops/{buy}/delete")
     assert r.status_code == 400 and f"#{sale}" in r.json()["violations"][0]
-    # правка меняет саму покупку
+    # правка меняет саму покупку; строка — по-прежнему одна покупка
     assert client.post(f"/api/ops/{buy}/edit", json={"price": "12", "quantity": 10}).status_code == 200
-    [pos] = client.get("/api/portfolio").json()["rows"]
-    assert pos["avg_price"] == 12.0 and pos["single_op"] is None  # строка из покупки и продажи
+    [pos] = rows_of(client)
+    assert (pos["avg_price"], pos["quantity"], pos["bought"], pos["single_op"]["op_id"]) == (12.0, 6, 10, buy)
     assert client.post(f"/api/ops/{buy}/edit", json={"price": "12"}).json()["error"] == "ничего не изменилось"
-    # удаление продажи — насовсем
+    # удаление продажи — насовсем, штуки возвращаются в свою строку
     assert client.post(f"/api/ops/{sale}/delete").status_code == 200
-    assert client.get("/api/portfolio").json()["rows"][0]["quantity"] == 10
+    assert rows_of(client)[0]["quantity"] == 10
     assert client.get("/journal").status_code == 404 and client.get("/api/journal").status_code == 404
 
 
-def test_order_fill_comment_in_portfolio_row(client):
+def test_edit_sale_in_closed_positions(client):
+    # Продажу правят в «Закрытых позициях»: количество возвращается в портфель или уходит из него.
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    lot = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB",
+                                        "quantity": 10, "price": "10", "date": "2026-01-10"}).json()["op_id"]
+    sale = client.post("/api/sell", json={"lot_id": lot, "quantity": 4, "price": "15", "date": "2026-01-20"}).json()["op_id"]
+    assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 6, "price": "20", "date": "2026-01-25"}).status_code == 200
+    [closed] = rows_of(client, closed=True)
+    assert (closed["quantity"], closed["sale_price"], closed["sale_date"], closed["profit"]) == (6, 20.0, "2026-01-25", 60.0)
+    assert rows_of(client)[0]["quantity"] == 4
+    assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 11}).status_code == 400  # больше, чем куплено
+    assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 2}).status_code == 200
+    assert rows_of(client)[0]["quantity"] == 8
+    assert client.get("/api/stats").json()["summary"]["total_sold_usd"] == 0.5  # 2 × 20 ₽ по курсу 80
+
+
+def test_each_order_fill_is_its_own_row(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
     order = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 10, "price": "5"}
     first = client.post("/api/orders", json={**order, "comment": "на лето"}).json()["order_id"]
     client.post(f"/api/orders/{first}/fill", json={"quantity": 4})
+    client.post(f"/api/orders/{first}/fill", json={"quantity": 2})
     second = client.post("/api/orders", json={**order, "comment": "добор"}).json()["order_id"]
     client.post(f"/api/orders/{second}/fill", json={})
-    [row] = client.get("/api/portfolio").json()["rows"]
-    assert row["quantity"] == 14 and row["comment"] == "на лето; добор"
-    assert [o["quantity"] for o in client.get("/api/orders").json()["rows"]] == [6]
+    assert sorted((r["quantity"], r["comment"]) for r in rows_of(client)) == [(2, "на лето"), (4, "на лето"), (10, "добор")]
+    [merged] = client.get("/api/portfolio?collapse=true").json()["rows"]
+    assert (merged["quantity"], merged["lots"], merged["comment"], merged["single_op"]) == (16, 3, "на лето; добор", None)
+    assert [o["quantity"] for o in client.get("/api/orders").json()["rows"]] == [4]
 
 
 def test_fx_endpoint_uses_cbr_before_steam_history(client):
@@ -132,13 +154,13 @@ def test_money_parsing(client):
 def test_remove_position_endpoint(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
-    client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD", "quantity": 2, "price": "0,50"})
-    r = client.post("/api/remove-position", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD"})
-    assert r.status_code == 200
-    assert client.get("/api/portfolio").json()["rows"] == []
+    lot = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD", "quantity": 2,
+                                        "price": "0,50"}).json()["op_id"]
+    r = client.post("/api/remove-position", json={"lot_id": lot})
+    assert r.status_code == 200 and r.json()["removed"] == 2
+    assert rows_of(client) == []
     assert client.get("/api/stats").json()["summary"]["total_invested_usd"] == 0
-    again = client.post("/api/remove-position", json={"item": "Kilowatt Case", "account_id": acc, "currency": "USD"})
-    assert again.status_code == 400
+    assert client.post("/api/remove-position", json={"lot_id": lot}).status_code == 400
 
 
 def test_stats_series_by_currency(client):
@@ -153,7 +175,7 @@ def test_stats_series_by_currency(client):
     assert len(client.get("/api/meta").json()["currencies"]) == 39
 
 
-def test_portfolio_tabs_and_row_purchases(client):
+def test_portfolio_tabs_and_rows_per_purchase(client):
     login(client)
     assert client.get("/orders", follow_redirects=False).headers["location"] == "/portfolio#orders"
     page = client.get("/portfolio").text
@@ -162,60 +184,42 @@ def test_portfolio_tabs_and_row_purchases(client):
     acc2 = client.post("/api/accounts", json={"name": "B"}).json()["id"]
     trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
     one = client.post("/api/buy", json={**trade, "quantity": 5, "price": "10"}).json()["op_id"]
-    [row] = client.get("/api/portfolio").json()["rows"]
-    assert row["single_op"]["op_id"] == one and [b["op_id"] for b in row["buys"]] == [one]
-    # правка из ячейки — это правка самой покупки
+    [row] = rows_of(client)
+    assert row["single_op"]["op_id"] == one and row["lot_id"] == one
     assert client.post(f"/api/ops/{one}/edit", json={"quantity": 7}).status_code == 200
     two = client.post("/api/buy", json={**trade, "quantity": 1, "price": "20"}).json()["op_id"]
-    [row] = client.get("/api/portfolio").json()["rows"]
-    assert row["quantity"] == 8 and row["single_op"] is None and [b["op_id"] for b in row["buys"]] == [one, two]
-    client.post("/api/transfer", json={**trade, "from_account_id": acc, "to_account_id": acc2, "quantity": 2})
-    moved = next(r for r in client.get("/api/portfolio").json()["rows"] if r["account_id"] == acc2)
-    # получена переносом — это обычная покупка по средней цене исходной строки, её можно править в ячейке
-    assert moved["single_op"]["kind"] == "buy" and moved["quantity"] == 2 and moved["first_buy_date"] == row["first_buy_date"]
+    # покупки не складываются: две строки, у каждой своя цена
+    assert sorted((r["lot_id"], r["quantity"], r["avg_price"]) for r in rows_of(client)) == [(one, 7, 10.0), (two, 1, 20.0)]
+    client.post("/api/transfer", json={"lot_id": one, "to_account_id": acc2, "quantity": 2})
+    moved = next(r for r in rows_of(client) if r["account_id"] == acc2)
+    # получена переносом — это обычная покупка по цене исходной строки, её можно править в ячейке
+    assert moved["single_op"]["kind"] == "buy" and moved["quantity"] == 2 and moved["avg_price"] == 10.0
 
 
-def test_row_reopened_same_day_edits_in_cell(client):
-    # Всё перенесли и в тот же день купили снова — новая строка из одной покупки правится в ячейке.
+def test_transfer_carries_date_and_comment(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
     acc2 = client.post("/api/accounts", json={"name": "B"}).json()["id"]
-    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
-    client.post("/api/buy", json={**trade, "quantity": 10, "price": "15", "date": "2024-11-02"})
-    client.post("/api/transfer", json={**trade, "from_account_id": acc, "to_account_id": acc2, "quantity": 10,
-                                       "comment": "с A"})
-    again = client.post("/api/buy", json={**trade, "quantity": 7, "price": "15"}).json()["op_id"]
-    rows = {r["account_id"]: r for r in client.get("/api/portfolio").json()["rows"]}
-    assert rows[acc]["single_op"]["op_id"] == again
-    assert rows[acc2]["first_buy_date"] == "2024-11-02" and rows[acc2]["comment"] == "с A"
+    lot = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 10,
+                                        "price": "15", "date": "2024-11-02"}).json()["op_id"]
+    client.post("/api/transfer", json={"lot_id": lot, "to_account_id": acc2, "quantity": 10, "comment": "с A"})
+    [row] = rows_of(client)
+    assert (row["account_id"], row["first_buy_date"], row["comment"]) == (acc2, "2024-11-02", "с A")
 
 
-def test_removed_purchases_are_not_part_of_row(client):
-    # Две ошибочные покупки удалены, потом внесена покупка задним числом — строка состоит только из неё.
+def test_delete_closed_row_returns_to_its_row(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
     trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB"}
-    for quantity in (200, 1200):
-        bought = client.post("/api/buy", json={**trade, "quantity": quantity, "price": "100", "date": "2026-10-31"})
-        assert bought.status_code == 200, bought.text
-        removed = client.post("/api/remove-position", json=trade)
-        assert removed.status_code == 200, removed.text
-    real = client.post("/api/buy", json={**trade, "quantity": 500, "price": "100", "date": "2026-10-27"}).json()["op_id"]
-    [row] = client.get("/api/portfolio").json()["rows"]
-    assert row["quantity"] == 500 and [b["op_id"] for b in row["buys"]] == [real] and row["single_op"]["op_id"] == real
-
-
-def test_delete_closed_row_returns_to_portfolio(client):
-    login(client)
-    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
-    trade = {"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 3}
-    client.post("/api/buy", json={**trade, "price": "10"})
-    client.post("/api/sell", json={**trade, "price": "50"})
-    [sale] = client.get("/api/portfolio?closed=true").json()["rows"]
-    assert client.get("/api/portfolio").json()["rows"] == []
+    first = client.post("/api/buy", json={**trade, "quantity": 3, "price": "10"}).json()["op_id"]
+    client.post("/api/buy", json={**trade, "quantity": 5, "price": "30"})
+    client.post("/api/sell", json={"lot_id": first, "quantity": 3, "price": "50"})
+    [sale] = rows_of(client, closed=True)
+    assert (sale["lot_id"], sale["avg_price"], sale["profit"]) == (first, 10.0, 120.0)
+    assert [r["quantity"] for r in rows_of(client)] == [5]
     assert client.post(f"/api/ops/{sale['op_id']}/delete").status_code == 200
-    assert client.get("/api/portfolio?closed=true").json()["rows"] == []
-    assert client.get("/api/portfolio").json()["rows"][0]["quantity"] == 3
+    assert rows_of(client, closed=True) == []
+    assert sorted((r["lot_id"] == first, r["quantity"]) for r in rows_of(client)) == [(False, 5), (True, 3)]
     assert client.get("/api/stats").json()["summary"]["total_profit_usd"] == 0
 
 

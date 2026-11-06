@@ -5,7 +5,6 @@ import pytest
 from steamfolio import db
 from steamfolio.currencies import Currency
 from steamfolio.journal import JournalError
-from steamfolio.ledger import RowKey
 
 RUB = Currency.RUB
 CASE = "Kilowatt Case"
@@ -28,12 +27,13 @@ def test_remove_rest_after_sale_erases_rest_of_purchase(journal, acc):
     assert ledger.profit_usd == 400 and len(ledger.sales) == 1  # продажа осталась
 
 
-def test_remove_takes_latest_purchases_first(journal, acc):
-    journal.buy(CASE, acc, RUB, 10, 8000, D("2026-09-01"))
-    journal.buy(CASE, acc, RUB, 10, 8000, D("2026-09-05"))
-    journal.sell(CASE, acc, RUB, 5, 8000, D("2026-09-10"))
-    journal.remove_position(CASE, acc, RUB)  # 15: сентябрьские 10 от 05.09 и 5 от 01.09
-    assert kinds(journal) == [("buy", CASE, acc, 5), ("sell", CASE, acc, 5)]
+def test_remove_touches_only_its_row(journal, acc):
+    first = journal.buy(CASE, acc, RUB, 10, 8000, D("2026-09-01"))
+    second = journal.buy(CASE, acc, RUB, 10, 8000, D("2026-09-05"))
+    journal.sell(first, 5, 8000, D("2026-09-10"))
+    assert journal.remove_position(first) == 5  # остаток первой строки; вторая не меняется
+    assert kinds(journal) == [("buy", CASE, acc, 5), ("buy", CASE, acc, 10), ("sell", CASE, acc, 5)]
+    assert journal.ledger().lot(second).quantity == 10
 
 
 def test_remove_transferred_row_erases_it_at_source_too(journal, acc, acc2):
@@ -43,7 +43,7 @@ def test_remove_transferred_row_erases_it_at_source_too(journal, acc, acc2):
     # перенос и привезённая покупка стёрты, исходная покупка — 3 шт.
     assert kinds(journal) == [("buy", CASE, acc, 3)]
     ledger = journal.ledger()
-    assert ledger.positions[RowKey(CASE, acc, RUB)].quantity == 3
+    assert ledger.total(CASE, acc, RUB).quantity == 3
     assert ledger.invested_usd == 300
 
 

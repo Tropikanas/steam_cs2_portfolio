@@ -34,9 +34,38 @@ def fx():
     return FakeFx()
 
 
+class RowJournal(Journal):
+    """Для тестов: продажа, перенос и удаление можно звать и по предмету/аккаунту/валюте, как раньше —
+    берётся самая ранняя строка (покупка) этого предмета с достаточным остатком."""
+
+    def lot_for(self, item, account_id, currency, quantity=1):
+        rows = sorted((p for p in self.ledger().positions.values() if p.key[:3] == (item, account_id, currency)),
+                      key=lambda p: (p.quantity < quantity, p.quantity == 0, p.first_buy_date, p.key.lot))
+        return rows[0].key.lot if rows else 10**12  # нет строки — пусть запись сама скажет, что продавать нечего
+
+    def sell(self, *args, **kwargs):
+        if isinstance(args[0], str):
+            item, account_id, currency, quantity, price, *rest = args
+            return super().sell(self.lot_for(item, account_id, currency, quantity), quantity, price, *rest, **kwargs)
+        return super().sell(*args, **kwargs)
+
+    def transfer(self, *args, **kwargs):
+        if isinstance(args[0], str):
+            item, from_account, to_account, currency, quantity, *rest = args
+            if rest:
+                kwargs.setdefault("op_date", rest[0])
+            return super().transfer(self.lot_for(item, from_account, currency, quantity), to_account, quantity, **kwargs)
+        return super().transfer(*args, **kwargs)
+
+    def remove_position(self, *args):
+        if isinstance(args[0], str):
+            return super().remove_position(self.lot_for(*args))
+        return super().remove_position(*args)
+
+
 @pytest.fixture
 def journal(conn, fx):
-    return Journal(conn, fx)
+    return RowJournal(conn, fx)
 
 
 @pytest.fixture

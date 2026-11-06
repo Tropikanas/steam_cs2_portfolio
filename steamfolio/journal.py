@@ -184,6 +184,14 @@ class Journal:
             raise JournalError(f"нельзя изменить поля: {', '.join(sorted(unknown))}")
         if target.kind == "sell" and {"market_hash_name", "account_id", "currency"} & set(changes):
             raise JournalError("у продажи предмет, аккаунт и валюта — как у строки, из которой продано")
+        moves = {k for k in ("market_hash_name", "account_id", "currency")
+                 if k in changes and changes[k] != getattr(target, k) and not (k == "currency" and Currency(changes[k]) == target.currency)}
+        if target.kind == "buy" and moves and any(op.kind == "sell" and op.target_id == op_id for op in self.ops()):
+            # Иначе прошлые продажи в «Закрытых позициях» оказались бы с другого аккаунта (в другой валюте, другого предмета).
+            raise JournalError(
+                f"Из позиции с ID {target.position_no} уже продавали — аккаунт, валюту и предмет у неё менять нельзя: "
+                "продажи в «Закрытых позициях» были с прежними. Чтобы переложить остаток на другой аккаунт, "
+                "используйте «Перенести».")
         if "currency" in changes:
             changes["currency"] = Currency(changes["currency"])
         if "fx_rate" in changes:
@@ -332,12 +340,14 @@ class Journal:
         ).lastrowid
 
     def _free_position_no(self) -> int:
-        """«ID позиции» новой строки: на 1 больше наибольшего ID, который виден в «Текущем портфеле»
-        (строки с остатком) или в «Закрытых позициях» (строки, из которых продавали)."""
+        """«ID позиции» новой строки: наименьший номер, которого нет ни в «Текущем портфеле» (строки с остатком),
+        ни в «Закрытых позициях» (строки, из которых продавали). Стёртый корзиной номер из середины
+        возвращается; если пропусков нет — на 1 больше наибольшего."""
         ops = self.ops()
         ledger = replay(ops)
         visible = {p.key.lot for p in ledger.open_positions} | {s.key.lot for s in ledger.sales}
-        return max((op.position_no or 0 for op in ops if op.id in visible), default=0) + 1
+        taken = {op.position_no for op in ops if op.id in visible and op.position_no}
+        return next(n for n in range(1, len(taken) + 2) if n not in taken)
 
     def _describe_violations(self, after: Ledger, before: Ledger) -> list[str]:
         known = {(v.op_id, v.message) for v in before.violations}

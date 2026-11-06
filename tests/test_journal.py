@@ -304,21 +304,33 @@ def test_each_order_fill_is_its_own_row_with_order_comment(journal, acc):
 
 # ---------- «ID позиции» ----------
 
-def test_new_position_id_is_max_visible_plus_one(journal, acc, acc2):
+def test_new_position_id_fills_erased_gaps(journal, acc, acc2):
     a = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-01"))
     b = journal.fill_order(journal.place_order(CASE, acc, RUB, 5, 1000))
     c = journal.buy(CASE, acc, RUB, 3, 1000, D("2026-01-02"))
     assert [journal.op(i).position_no for i in (a, b, c)] == [1, 2, 3]
-    journal.remove_position(b)  # корзина в середине — номер 2 больше не появится, новая строка — после наибольшего
+    journal.remove_position(b)  # корзина в середине — номер 2 стёрт отовсюду и вернётся
     d = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-03"))
-    assert journal.op(d).position_no == 4
+    assert journal.op(d).position_no == 2
     journal.sell(c, 3, 2000, D("2026-01-05"))  # строка 3 продана целиком — её ID остаётся в «Закрытых позициях»
-    journal.remove_position(d)  # корзина у наибольшего — следующая строка получит тот же номер
     e = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-06"))
-    assert journal.op(e).position_no == 4
-    moved = journal.transfer(a, acc2, 4)  # часть позиции — новая строка с новым ID
-    arrival = next(op for op in journal.ops() if op.target_id == moved)
-    assert arrival.position_no == 5 and journal.op(c).position_no == 3
+    assert journal.op(e).position_no == 4  # пропусков нет — на 1 больше наибольшего
+    journal.sell(a, 2, 2000, D("2026-01-07"))
+    journal.remove_position(a)  # из позиции 1 продавали — после корзины её ID остаётся в «Закрытых позициях»
+    moved = journal.transfer(e, acc2, 1)  # вся позиция без продаж — тот же ID
+    assert journal.op(moved).position_no == 4
+    assert journal.op(journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-08"))).position_no == 5
+
+
+def test_sold_row_keeps_account_currency_and_item(journal, acc, acc2):
+    lot = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-01"))
+    journal.edit(lot, account_id=acc2)  # продаж нет — можно (исправление ошибки)
+    journal.sell(lot, 2, 2000, D("2026-01-05"))
+    for change in ({"account_id": acc}, {"currency": USD}, {"market_hash_name": "AK"}):
+        with pytest.raises(JournalError, match="уже продавали"):
+            journal.edit(lot, **change)
+    journal.edit(lot, price=900)  # цена, дата, количество — по-прежнему правятся
+    assert journal.op(lot).price == 900
 
 
 def test_sale_above_bought_names_position(journal, acc, acc2):

@@ -161,9 +161,21 @@ def test_transfer_validation(journal, acc, acc2):
         journal.transfer(CASE, acc, acc, RUB, 1, D("2026-01-02"))
     with pytest.raises(JournalError):
         journal.transfer(CASE, acc, 999, RUB, 1, D("2026-01-02"))
-    moved = journal.transfer(CASE, acc, acc2, RUB, 5, D("2026-01-02"))
+    moved = journal.transfer(CASE, acc, acc2, RUB, 3, D("2026-01-02"))
     with pytest.raises(JournalError, match="только покупки и продажи"):
         journal.edit(moved, quantity=1)
+
+
+def test_whole_row_transfer_keeps_position_id(journal, acc, acc2):
+    lot = journal.buy(CASE, acc, RUB, 5, 1000, D("2026-01-01"))
+    assert journal.transfer(lot, acc2, 5, comment="туда") == lot  # та же строка переехала
+    op = journal.op(lot)
+    assert (op.account_id, op.position_no, op.comment, len(journal.ops())) == (acc2, 1, "туда", 1)
+    # из позиции продавали — её ID уже в «Закрытых позициях»: переносится новой строкой с новым ID
+    journal.sell(lot, 2, 2000, D("2026-01-05"))
+    moved = journal.transfer(lot, acc, 3)
+    arrival = next(o for o in journal.ops() if o.target_id == moved)
+    assert (arrival.account_id, arrival.position_no) == (acc, 2)
 
 
 def test_transferred_row_is_an_editable_buy(journal, fx, acc, acc2):
@@ -292,29 +304,33 @@ def test_each_order_fill_is_its_own_row_with_order_comment(journal, acc):
 
 # ---------- «ID позиции» ----------
 
-def test_position_numbers_assigned_and_reused_after_trash(journal, acc, acc2):
+def test_new_position_id_is_max_visible_plus_one(journal, acc, acc2):
     a = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-01"))
     b = journal.fill_order(journal.place_order(CASE, acc, RUB, 5, 1000))
     c = journal.buy(CASE, acc, RUB, 3, 1000, D("2026-01-02"))
     assert [journal.op(i).position_no for i in (a, b, c)] == [1, 2, 3]
-    journal.remove_position(b)  # корзина — строки нет, её номер свободен
+    journal.remove_position(b)  # корзина в середине — номер 2 больше не появится, новая строка — после наибольшего
     d = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-03"))
-    assert journal.op(d).position_no == 2
-    journal.sell(c, 3, 2000, D("2026-01-05"))
-    journal.remove_position(a)  # 10 шт. без продаж — номер 1 свободен
-    moved = journal.transfer(d, acc2, 1)
+    assert journal.op(d).position_no == 4
+    journal.sell(c, 3, 2000, D("2026-01-05"))  # строка 3 продана целиком — её ID остаётся в «Закрытых позициях»
+    journal.remove_position(d)  # корзина у наибольшего — следующая строка получит тот же номер
+    e = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-06"))
+    assert journal.op(e).position_no == 4
+    moved = journal.transfer(a, acc2, 4)  # часть позиции — новая строка с новым ID
     arrival = next(op for op in journal.ops() if op.target_id == moved)
-    assert arrival.position_no == 1  # перенос — тоже новая строка
-    assert journal.op(c).position_no == 3  # проданная строка сохраняет номер: на него ссылается продажа
+    assert arrival.position_no == 5 and journal.op(c).position_no == 3
 
 
-def test_sale_above_bought_names_position(journal, acc):
+def test_sale_above_bought_names_position(journal, acc, acc2):
     lot = journal.buy(CASE, acc, RUB, 1000, 1000, D("2026-01-01"))
-    sale = journal.sell(lot, 1000, 1500, D("2026-01-05"))
+    sale = journal.sell(lot, 400, 1500, D("2026-01-05"))
+    journal.sell(lot, 500, 1500, D("2026-01-06"))
+    journal.transfer(lot, acc2, 50)  # перенесённое — уже другая позиция
     with pytest.raises(JournalError) as err:
-        journal.edit(sale, quantity=1001)
+        journal.edit(sale, quantity=460)
+    # купленное по позиции = остаток 50 + продано 400 + 500
     assert str(err.value) == ("Количество продаваемых предметов по позиции с ID 1 не может превышать количество "
-                              "купленного по данной позиции. См. «Текущий портфель», позиция ID 1.")
+                              "купленного по данной позиции (950). См. «Текущий портфель», позиция ID 1.")
 
 
 # ---------- изменение и удаление ----------

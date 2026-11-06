@@ -126,6 +126,17 @@ class Journal:
         src = self.ledger().lot(lot_id)
         if src is None or src.quantity < quantity:
             raise JournalError(f"перенос {quantity} шт. «{lot.market_hash_name}» при остатке {src.quantity if src else 0} шт.")
+        if quantity == src.bought:
+            # Переносится вся позиция, из неё ничего не продавали и не переносили: та же строка с тем же ID
+            # просто переезжает на другой аккаунт (комментарий — из формы).
+            ops = self.ops()
+            moved = replace(lot, account_id=to_account_id, comment=comment)
+            self._check(ops, [moved if op.id == lot_id else op for op in ops], "перенос не записан")
+            with self.conn:
+                self.conn.execute("UPDATE operations SET account_id = ?, comment = ? WHERE id = ?",
+                                  (to_account_id, comment, lot_id))
+            return lot_id
+        # Часть позиции или позиция с продажами (её ID уже в «Закрытых позициях») — новая строка с новым ID.
         now = utcnow()
         out = Op(PENDING_ID, "transfer", op_date, now, lot.market_hash_name, lot.account_id, lot.currency, quantity,
                  comment=comment, to_account_id=to_account_id, payload={"split": True, "lot": lot_id})
@@ -194,12 +205,19 @@ class Journal:
         followers = [replace(op, **same) for op in ops if op.kind in ("sell", "transfer") and lot_of(op) == op_id]
         changed = {op.id: op for op in [after, *followers]}
         new_ops = [changed.get(op.id, op) for op in ops]
-        if target.kind == "sell" and any(v.op_id == op_id for v in replay(new_ops).violations):
-            # Продажа больше, чем осталось в её строке, — называем позицию, как в «Текущем портфеле».
+        before_violations = {(v.op_id, v.message) for v in replay(ops).violations}
+        same_lot = {op.id for op in new_ops if lot_of(op) == target.target_id and op.kind in ("sell", "transfer")}
+        if target.kind == "sell" and any(v.op_id in same_lot and (v.op_id, v.message) not in before_violations
+                                         for v in replay(new_ops).violations):
+            # Продажа больше, чем было в её строке, — называем позицию, как в «Текущем портфеле».
+            # Купленное по позиции = её остаток в портфеле + всё проданное из неё (по «Закрытым позициям»).
+            ledger = replay(ops)
             no = next((op.position_no for op in ops if op.id == target.target_id), None)
+            lot = ledger.lot(target.target_id)
+            bought = (lot.quantity if lot else 0) + sum(s.quantity for s in ledger.sales if s.key.lot == target.target_id)
             raise JournalError(
                 f"Количество продаваемых предметов по позиции с ID {no} не может превышать количество купленного "
-                f"по данной позиции. См. «Текущий портфель», позиция ID {no}.")
+                f"по данной позиции ({bought}). См. «Текущий портфель», позиция ID {no}.")
         self._check(ops, new_ops, f"{KIND_NAMES[target.kind]} не изменена")
         with self.conn:
             for op in changed.values():
@@ -314,11 +332,12 @@ class Journal:
         ).lastrowid
 
     def _free_position_no(self) -> int:
-        """«ID позиции» новой строки: наименьший свободный номер (номер стёртой корзиной строки свободен)."""
-        taken = {r[0] for r in self.conn.execute(
-            "SELECT position_no FROM operations WHERE portfolio_id = ? AND kind = 'buy' AND position_no IS NOT NULL",
-            (self.portfolio_id,))}
-        return next(n for n in range(1, len(taken) + 2) if n not in taken)
+        """«ID позиции» новой строки: на 1 больше наибольшего ID, который виден в «Текущем портфеле»
+        (строки с остатком) или в «Закрытых позициях» (строки, из которых продавали)."""
+        ops = self.ops()
+        ledger = replay(ops)
+        visible = {p.key.lot for p in ledger.open_positions} | {s.key.lot for s in ledger.sales}
+        return max((op.position_no or 0 for op in ops if op.id in visible), default=0) + 1
 
     def _describe_violations(self, after: Ledger, before: Ledger) -> list[str]:
         known = {(v.op_id, v.message) for v in before.violations}

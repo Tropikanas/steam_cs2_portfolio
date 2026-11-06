@@ -513,12 +513,12 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
     def delete_account(account_id: int, conn: Conn, user: User) -> dict[str, Any]:
         _own_account(conn, account_id)
         used = conn.execute(
-            "SELECT 1 FROM operations WHERE account_id = ? OR to_account_id = ? LIMIT 1", (account_id, account_id)
+            """SELECT 1 FROM operations WHERE account_id = ? OR to_account_id = ?
+               UNION SELECT 1 FROM orders WHERE account_id = ? LIMIT 1""", (account_id, account_id, account_id)
         ).fetchone()
         if used:
             raise ApiError("по аккаунту есть операции — его можно только скрыть")
         with conn:
-            conn.execute("DELETE FROM position_comments WHERE account_id = ?", (account_id,))
             conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         return {"ok": True}
 

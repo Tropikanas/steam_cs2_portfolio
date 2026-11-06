@@ -213,6 +213,7 @@ class Journal:
         followers = [replace(op, **same) for op in ops if op.kind in ("sell", "transfer") and lot_of(op) == op_id]
         changed = {op.id: op for op in [after, *followers]}
         new_ops = [changed.get(op.id, op) for op in ops]
+        self._check_dates(replay(new_ops), replay(ops), new_ops)
         before_violations = {(v.op_id, v.message) for v in replay(ops).violations}
         same_lot = {op.id for op in new_ops if lot_of(op) == target.target_id and op.kind in ("sell", "transfer")}
         if target.kind == "sell" and any(v.op_id in same_lot and (v.op_id, v.message) not in before_violations
@@ -303,9 +304,25 @@ class Journal:
     # ---------- внутреннее ----------
 
     def _check(self, before_ops: list[Op], after_ops: list[Op], action: str) -> None:
-        problems = self._describe_violations(replay(after_ops), replay(before_ops))
+        after, before = replay(after_ops), replay(before_ops)
+        self._check_dates(after, before, after_ops)
+        problems = self._describe_violations(after, before)
         if problems:
             raise JournalError(f"{action}: противоречит другим записям", problems)
+
+    @staticmethod
+    def _check_dates(after: Ledger, before: Ledger, after_ops: list[Op]) -> None:
+        """Продажа раньше покупки своей позиции — понятным текстом (дату продажи или покупки сдвинули)."""
+        known = {(v.op_id, v.message) for v in before.violations}
+        by_id = {op.id: op for op in after_ops}
+        for v in after.violations:
+            sale = by_id.get(v.op_id)
+            lot = by_id.get(sale.target_id) if sale and sale.kind == "sell" else None
+            if (v.op_id, v.message) in known or lot is None or sale.op_date >= lot.op_date:
+                continue
+            raise JournalError(
+                f"Дата продажи ({sale.op_date:%d.%m.%Y}) не может быть раньше даты покупки позиции с ID "
+                f"{lot.position_no} ({lot.op_date:%d.%m.%Y}).")
 
     def _add(self, op: Op) -> int:
         ops = self.ops()

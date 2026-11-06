@@ -68,7 +68,8 @@ def _items(conn: sqlite3.Connection, names: set[str]) -> dict[str, sqlite3.Row]:
 def accounts(conn: sqlite3.Connection, portfolio_id: int = 1) -> list[dict[str, Any]]:
     rows = conn.execute(
         """SELECT a.id, a.name, a.hidden,
-                  EXISTS (SELECT 1 FROM operations o WHERE o.account_id = a.id OR o.to_account_id = a.id) AS used
+                  EXISTS (SELECT 1 FROM operations o WHERE o.account_id = a.id OR o.to_account_id = a.id)
+                  OR EXISTS (SELECT 1 FROM orders r WHERE r.account_id = a.id) AS used
            FROM accounts a WHERE a.portfolio_id = ? ORDER BY a.name""",
         (portfolio_id,),
     ).fetchall()

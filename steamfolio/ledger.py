@@ -242,6 +242,10 @@ def daily_holdings(ops: list[Op]) -> list[tuple[date, dict[RowKey, Holding]]]:
     лежали на исходном аккаунте — на графике она приходит в день переноса, иначе штуки посчитались бы дважды.
     """
     clean = effective_ops(ops)
+    buys = {op.id: op for op in clean if op.kind == "buy"}
+    # Перенос из позиции, дату покупки которой сдвинули позже переноса, — в день покупки (см. timeline_key).
+    clean = [replace(op, op_date=buys[lot_of(op)].op_date) if is_split_transfer(op) and lot_of(op) in buys
+             and buys[lot_of(op)].op_date > op.op_date else op for op in clean]
     transfers = {op.id: op for op in clean if is_split_transfer(op)}
     clean = [replace(op, op_date=transfers[op.target_id].op_date, created_at=transfers[op.target_id].created_at)
              if is_transfer_buy(op) and op.target_id in transfers and op.op_date < transfers[op.target_id].op_date
@@ -269,11 +273,20 @@ def timeline_key(current: list[Op]) -> Callable[[Op], tuple]:
     """Порядок пересчёта: по дате, внутри дня — по вводу. Покупка, привезённая переносом, датирована
     покупкой исходной строки, но применяется сразу после переноса (до него этих штук на аккаунте не было)."""
     transfers = {op.id: op for op in current if is_split_transfer(op)}
+    buys = {op.id: op for op in current if op.kind == "buy"}
+
+    def moved_at(t: Op) -> tuple:
+        # Дату покупки исходной позиции могли сдвинуть позже переноса: перенесённая часть — уже отдельная
+        # позиция, перенос просто списывается сразу после покупки.
+        lot = buys.get(lot_of(t))
+        return max(t.sort_key, lot.sort_key) if lot else t.sort_key
 
     def key(op: Op) -> tuple:
+        if op.id in transfers:
+            return (*moved_at(op), 1)
         t = transfers.get(op.target_id) if is_transfer_buy(op) else None
-        if t is not None and op.sort_key < t.sort_key:
-            return (*t.sort_key, 1)
+        if t is not None and op.sort_key < moved_at(t):
+            return (*moved_at(t), 2)
         return (*op.sort_key, 0)
 
     return key

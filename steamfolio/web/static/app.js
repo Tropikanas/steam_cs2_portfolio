@@ -664,7 +664,7 @@ const SF = (() => {
       document.getElementById("btn-buy").classList.toggle("hidden", closed.checked);
       document.getElementById("collapse-toggle").classList.toggle("hidden", closed.checked);
       document.getElementById("edit-hint").textContent = closed.checked
-        ? "Строка — одна продажа. Двойной щелчок по количеству, цене или дате продажи — изменить продажу; портфель и статистика пересчитаются."
+        ? "Строка — одна продажа. Двойной щелчок по количеству, цене или дате продажи — изменить продажу; портфель и статистика пересчитаются. Комментарий — щелчок."
         : "Строка — одна покупка. Двойной щелчок по количеству, цене, дате покупки, валюте или аккаунту — изменить покупку.";
       reload();
     }
@@ -696,7 +696,9 @@ const SF = (() => {
         html: (r) => `<span title="За ${num(r.days, 0)} дн. владения">${pct(r.annual_pct)}</span>` },
       { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames, values: (r) => [r.account],
         html: (r) => esc(r.account) },
-      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
+      { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true,
+        html: (r) => `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`,
+        bind: (td, r) => bindComment(td, r, r.op_id) },  // комментарий продажи
       // Из какой позиции «Текущего портфеля» продано (не правится).
       { id: "position_no", title: "ID позиции", key: "position_no", cls: "num center", numeric: true, filter: true,
         html: (r) => r.position_no ?? "" },
@@ -831,8 +833,8 @@ const SF = (() => {
       if (control.tagName === "SELECT") control.addEventListener("change", () => finish(true));
     }
 
-    // Комментарий строки — комментарий её покупки.
-    function bindComment(td, r) {
+    // Комментарий строки — комментарий её покупки (в «Закрытых позициях» — продажи): opId — что правим.
+    function bindComment(td, r, opId = r.lot_id) {
       const span = td.querySelector(".comment-edit");
       const edit = () => {
         const input = document.createElement("input");
@@ -846,12 +848,12 @@ const SF = (() => {
           done = true;
           if (commit && input.value.trim() !== r.comment) {
             try {
-              await api("POST", `/api/ops/${r.lot_id}/edit`, { comment: input.value });
+              await api("POST", `/api/ops/${opId}/edit`, { comment: input.value });
               r.comment = input.value.trim();
             } catch (e) { toast(e.message, true); }
           }
           td.innerHTML = `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`;
-          bindComment(td, r);
+          bindComment(td, r, opId);
         };
         input.addEventListener("keydown", (e) => {
           if (e.key === "Enter") save(true);

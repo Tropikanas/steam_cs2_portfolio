@@ -136,6 +136,11 @@ def test_sale_has_its_own_comment(client):
     client.post("/api/sell", json={"lot_id": lot, "quantity": 1, "price": "25", "comment": "продал на пике"})
     assert sorted(r["comment"] for r in rows_of(client, closed=True)) == ["", "продал на пике"]
     assert rows_of(client)[0]["comment"] == "на долгий срок"
+    # комментарий продажи правится в «Закрытых позициях» и не трогает строку портфеля
+    sale = next(r for r in rows_of(client, closed=True) if not r["comment"])
+    assert client.post(f"/api/ops/{sale['op_id']}/edit", json={"comment": "в обмен"}).status_code == 200
+    assert sorted(r["comment"] for r in rows_of(client, closed=True)) == ["в обмен", "продал на пике"]
+    assert rows_of(client)[0]["comment"] == "на долгий срок"
 
 
 def test_each_order_fill_is_its_own_row(client):

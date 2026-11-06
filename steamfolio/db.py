@@ -355,6 +355,14 @@ MIGRATIONS: list[str] = [
                                             AND o.id <= operations.id)
     WHERE kind = 'buy';
     """,
+    # 10: комментарии строк живут в самих покупках, у продажи — свой. Продажам, внесённым до этого
+    # (06.11.2026, 21:07 UTC), когда комментарий брался из строки, он возвращается из их покупки.
+    # Старая таблица комментариев строк больше не нужна.
+    """
+    UPDATE operations SET comment = (SELECT b.comment FROM operations b WHERE b.id = operations.target_id)
+    WHERE kind = 'sell' AND comment = '' AND target_id IS NOT NULL AND created_at < '2026-11-06T21:07';
+    DROP TABLE IF EXISTS position_comments;
+    """,
 ]
 
 

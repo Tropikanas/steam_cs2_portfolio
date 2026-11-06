@@ -85,7 +85,7 @@ def test_cannot_sell_more_than_owned(journal, acc):
     lot = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-01"))
     with pytest.raises(JournalError, match="при остатке 1"):
         journal.sell(lot, 2, 1000, D("2026-01-02"))
-    with pytest.raises(JournalError, match="строки"):  # продажа раньше покупки — строки тогда ещё не было
+    with pytest.raises(JournalError, match="раньше даты покупки позиции с ID 1"):  # продажа раньше покупки
         journal.sell(lot, 1, 1000, D("2025-12-31"))
 
 
@@ -320,6 +320,22 @@ def test_new_position_id_fills_erased_gaps(journal, acc, acc2):
     moved = journal.transfer(e, acc2, 1)  # вся позиция без продаж — тот же ID
     assert journal.op(moved).position_no == 4
     assert journal.op(journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-08"))).position_no == 5
+
+
+def test_date_messages_and_purchase_date_after_partial_transfer(journal, acc, acc2):
+    lot = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))
+    sale = journal.sell(lot, 2, 2000, D("2026-01-20"))
+    with pytest.raises(JournalError, match=r"^Дата продажи \(05\.01\.2026\) не может быть раньше даты покупки позиции с ID 1 \(10\.01\.2026\)\.$"):
+        journal.edit(sale, op_date=D("2026-01-05"))
+    with pytest.raises(JournalError, match=r"^Дата продажи \(20\.01\.2026\) не может быть раньше даты покупки позиции с ID 1 \(25\.01\.2026\)\.$"):
+        journal.edit(lot, op_date=D("2026-01-25"))
+    # перенос части 15.01, потом дату покупки исходной позиции сдвинули на 18.01 — это разрешено:
+    # перенесённая часть — уже отдельная позиция
+    other = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))
+    journal.transfer(other, acc2, 4, op_date=D("2026-01-15"))
+    journal.edit(other, op_date=D("2026-01-18"))
+    ledger = journal.ledger()
+    assert ledger.lot(other).quantity == 6 and ledger.total(CASE, acc2, RUB).quantity == 4 and not ledger.violations
 
 
 def test_sold_row_keeps_account_currency_and_item(journal, acc, acc2):

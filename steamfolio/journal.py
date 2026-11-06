@@ -193,7 +193,14 @@ class Journal:
         same = {"market_hash_name": after.market_hash_name, "account_id": after.account_id, "currency": after.currency}
         followers = [replace(op, **same) for op in ops if op.kind in ("sell", "transfer") and lot_of(op) == op_id]
         changed = {op.id: op for op in [after, *followers]}
-        self._check(ops, [changed.get(op.id, op) for op in ops], f"{KIND_NAMES[target.kind]} не изменена")
+        new_ops = [changed.get(op.id, op) for op in ops]
+        if target.kind == "sell" and any(v.op_id == op_id for v in replay(new_ops).violations):
+            # Продажа больше, чем осталось в её строке, — называем позицию, как в «Текущем портфеле».
+            no = next((op.position_no for op in ops if op.id == target.target_id), None)
+            raise JournalError(
+                f"Количество продаваемых предметов по позиции с ID {no} не может превышать количество купленного "
+                f"по данной позиции. См. «Текущий портфель», позиция ID {no}.")
+        self._check(ops, new_ops, f"{KIND_NAMES[target.kind]} не изменена")
         with self.conn:
             for op in changed.values():
                 self.conn.execute(
@@ -290,19 +297,28 @@ class Journal:
         return first_id
 
     def _insert(self, op: Op) -> int:
+        if op.kind == "buy" and op.position_no is None:
+            op = replace(op, position_no=self._free_position_no())
         return self.conn.execute(
             """INSERT INTO operations (portfolio_id, user_id, kind, op_date, created_at, market_hash_name,
                    account_id, currency, quantity, price, fx_rate, fx_source, order_id, target_id, payload, comment,
-                   to_account_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   to_account_id, position_no)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 self.portfolio_id, self.user_id, op.kind, op.op_date.isoformat(), op.created_at,
                 op.market_hash_name, op.account_id, int(op.currency) if op.currency is not None else None,
                 op.quantity, op.price, str(op.fx_rate) if op.fx_rate is not None else None, op.fx_source,
                 op.order_id, op.target_id, json.dumps(op.payload, ensure_ascii=False) if op.payload else None,
-                op.comment, op.to_account_id,
+                op.comment, op.to_account_id, op.position_no,
             ),
         ).lastrowid
+
+    def _free_position_no(self) -> int:
+        """«ID позиции» новой строки: наименьший свободный номер (номер стёртой корзиной строки свободен)."""
+        taken = {r[0] for r in self.conn.execute(
+            "SELECT position_no FROM operations WHERE portfolio_id = ? AND kind = 'buy' AND position_no IS NOT NULL",
+            (self.portfolio_id,))}
+        return next(n for n in range(1, len(taken) + 2) if n not in taken)
 
     def _describe_violations(self, after: Ledger, before: Ledger) -> list[str]:
         known = {(v.op_id, v.message) for v in before.violations}

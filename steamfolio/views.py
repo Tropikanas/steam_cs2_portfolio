@@ -152,6 +152,7 @@ def portfolio(
             "comment": _joined([lots[p.key.lot].comment for p in group if p.key.lot in lots]),
             "cost_usd": _units(cost_usd),
             "lot_id": first.key.lot if not collapse else None,
+            "position_no": lots[first.key.lot].position_no if not collapse and first.key.lot in lots else None,
             "lots": len(group),
         }
         for column, delta in PERIODS.items():
@@ -250,6 +251,7 @@ def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1, ops: 
             "account": account_names.get(account_id, "?"),
             "account_id": account_id,
             "lot_id": lot,
+            "position_no": bought.position_no if bought else None,
             "comment": comment,
         })
     rows.sort(key=lambda r: (r["sale_date"], r["op_id"]), reverse=True)

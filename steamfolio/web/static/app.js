@@ -697,6 +697,9 @@ const SF = (() => {
       { id: "account", title: "Аккаунт", key: "account", filter: "list", options: accountNames, values: (r) => [r.account],
         html: (r) => esc(r.account) },
       { id: "comment", title: "Комментарий", key: "comment", cls: "comment", filter: true, html: (r) => esc(r.comment) },
+      // Из какой позиции «Текущего портфеля» продано (не правится).
+      { id: "position_no", title: "ID позиции", key: "position_no", cls: "num", numeric: true, filter: true,
+        html: (r) => r.position_no ?? "" },
       { id: "actions", title: "", cls: "actions", sortable: false,
         html: () => `<button class="small danger icon-btn" title="Удалить продажу" aria-label="Удалить продажу">${TRASH_ICON}</button>`,
         bind: (td, r) => { td.querySelector("button").onclick = () => deleteSaleForm(r); } },
@@ -731,6 +734,9 @@ const SF = (() => {
         html: (r) => collapse.checked ? esc(r.comment)
           : `<span class="comment-edit ${r.comment ? "" : "empty"}" tabindex="0">${esc(r.comment)}</span>`,
         bind: (td, r) => !collapse.checked && bindComment(td, r) },
+      // «ID позиции» — номер строки; у объединённых строк его нет, колонка скрыта.
+      ...(collapse.checked ? [] : [{ id: "position_no", title: "ID позиции", key: "position_no", cls: "num", numeric: true,
+        filter: true, html: (r) => r.position_no ?? "" }]),
       { id: "actions", title: "", cls: "actions", sortable: false,
         html: () => collapse.checked ? "" : '<button class="small" data-a="sell">Продано</button><button class="small" data-a="move">Перенести</button>'
           + `<button class="small danger icon-btn" data-a="remove" title="Удалить позицию" aria-label="Удалить позицию">${TRASH_ICON}</button>`,

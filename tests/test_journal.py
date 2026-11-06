@@ -290,6 +290,33 @@ def test_each_order_fill_is_its_own_row_with_order_comment(journal, acc):
     assert [journal.op(i).comment for i in (a, b, c, quiet)] == ["под мажор", "под мажор", "докупка на просадке", ""]
 
 
+# ---------- «ID позиции» ----------
+
+def test_position_numbers_assigned_and_reused_after_trash(journal, acc, acc2):
+    a = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-01"))
+    b = journal.fill_order(journal.place_order(CASE, acc, RUB, 5, 1000))
+    c = journal.buy(CASE, acc, RUB, 3, 1000, D("2026-01-02"))
+    assert [journal.op(i).position_no for i in (a, b, c)] == [1, 2, 3]
+    journal.remove_position(b)  # корзина — строки нет, её номер свободен
+    d = journal.buy(CASE, acc, RUB, 1, 1000, D("2026-01-03"))
+    assert journal.op(d).position_no == 2
+    journal.sell(c, 3, 2000, D("2026-01-05"))
+    journal.remove_position(a)  # 10 шт. без продаж — номер 1 свободен
+    moved = journal.transfer(d, acc2, 1)
+    arrival = next(op for op in journal.ops() if op.target_id == moved)
+    assert arrival.position_no == 1  # перенос — тоже новая строка
+    assert journal.op(c).position_no == 3  # проданная строка сохраняет номер: на него ссылается продажа
+
+
+def test_sale_above_bought_names_position(journal, acc):
+    lot = journal.buy(CASE, acc, RUB, 1000, 1000, D("2026-01-01"))
+    sale = journal.sell(lot, 1000, 1500, D("2026-01-05"))
+    with pytest.raises(JournalError) as err:
+        journal.edit(sale, quantity=1001)
+    assert str(err.value) == ("Количество продаваемых предметов по позиции с ID 1 не может превышать количество "
+                              "купленного по данной позиции. См. «Текущий портфель», позиция ID 1.")
+
+
 # ---------- изменение и удаление ----------
 
 def test_edit_changes_record_in_place(journal, acc):

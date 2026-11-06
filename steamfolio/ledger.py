@@ -43,6 +43,7 @@ class Op:
     comment: str = ""
     cancelled: bool = False
     to_account_id: int | None = None  # для переноса: куда (account_id — откуда)
+    position_no: int | None = None  # у покупки: «ID позиции» — номер строки портфеля
 
     @property
     def sort_key(self) -> tuple:
@@ -96,6 +97,7 @@ class Op:
             comment=row["comment"],
             cancelled=row["cancelled_at"] is not None,
             to_account_id=row["to_account_id"],
+            position_no=row["position_no"],
         )
 
 

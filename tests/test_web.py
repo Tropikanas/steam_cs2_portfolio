@@ -117,6 +117,8 @@ def test_edit_sale_in_closed_positions(client):
     assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 6, "price": "20", "date": "2026-01-25"}).status_code == 200
     [closed] = rows_of(client, closed=True)
     assert (closed["quantity"], closed["sale_price"], closed["sale_date"], closed["profit"]) == (6, 20.0, "2026-01-25", 60.0)
+    assert closed["position_no"] == rows_of(client)[0]["position_no"] == 1  # продано из позиции ID 1
+    assert client.get("/api/portfolio?collapse=true").json()["rows"][0]["position_no"] is None
     assert rows_of(client)[0]["quantity"] == 4
     assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 11}).status_code == 400  # больше, чем куплено
     assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 2}).status_code == 200

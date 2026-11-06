@@ -346,6 +346,15 @@ MIGRATIONS: list[str] = [
         created_at       TEXT NOT NULL
     );
     """,
+    # 9: «ID позиции» — порядковый номер строки портфеля (покупки). Номер стёртой корзиной строки
+    # освобождается и достаётся следующей новой строке. Имеющимся покупкам — по порядку ввода.
+    """
+    ALTER TABLE operations ADD COLUMN position_no INTEGER;
+    UPDATE operations SET position_no = (
+        SELECT COUNT(*) FROM operations o WHERE o.kind = 'buy' AND o.portfolio_id = operations.portfolio_id
+                                            AND o.id <= operations.id)
+    WHERE kind = 'buy';
+    """,
 ]
 
 

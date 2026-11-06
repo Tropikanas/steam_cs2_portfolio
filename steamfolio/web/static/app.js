@@ -925,6 +925,8 @@ const SF = (() => {
             { name: "price", label: `Чистая цена за штуку после комиссии, ${r.currency}`, inputmode: "decimal", attrs: 'pattern="[0-9 ]+([.,][0-9]{1,2})?"' }],
           { name: "date", label: "Дата продажи", type: "date", value: today(), attrs: `max="${today()}"` },
           fxField,
+          // Свой комментарий продажи — он будет в «Закрытых позициях»; комментарий строки портфеля не переносится.
+          { name: "comment", label: "Комментарий к продаже", type: "textarea", required: false },
         ],
         onInput: (ctx) => {
           const price = () => parseNum(ctx.el("price").value);
@@ -940,7 +942,7 @@ const SF = (() => {
         },
         onSubmit: async (v) => {
           await api("POST", "/api/sell", { lot_id: r.lot_id, quantity: +v.quantity, price: v.price, date: v.date,
-            fx_rate: v.fx_rate || null });
+            fx_rate: v.fx_rate || null, comment: v.comment || "" });
           toast(`Продажа записана: ${r.item}, ${v.quantity} шт.`);
           await reload();
         },

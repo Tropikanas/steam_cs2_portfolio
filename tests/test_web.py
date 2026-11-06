@@ -126,6 +126,18 @@ def test_edit_sale_in_closed_positions(client):
     assert client.get("/api/stats").json()["summary"]["total_sold_usd"] == 0.5  # 2 × 20 ₽ по курсу 80
 
 
+def test_sale_has_its_own_comment(client):
+    # Комментарий строки портфеля в «Закрытые позиции» не копируется — у продажи свой.
+    login(client)
+    acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]
+    lot = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB", "quantity": 5,
+                                        "price": "10", "comment": "на долгий срок"}).json()["op_id"]
+    client.post("/api/sell", json={"lot_id": lot, "quantity": 2, "price": "20"})
+    client.post("/api/sell", json={"lot_id": lot, "quantity": 1, "price": "25", "comment": "продал на пике"})
+    assert sorted(r["comment"] for r in rows_of(client, closed=True)) == ["", "продал на пике"]
+    assert rows_of(client)[0]["comment"] == "на долгий срок"
+
+
 def test_each_order_fill_is_its_own_row(client):
     login(client)
     acc = client.post("/api/accounts", json={"name": "A"}).json()["id"]

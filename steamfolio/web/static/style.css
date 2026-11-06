@@ -316,7 +316,7 @@ dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .login button { padding: 9px; }
 
 #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
-.toast { background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 8px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); }
+.toast { background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 8px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); white-space: pre-line; }
 .toast.bad { background: var(--error); color: #fff; }
 
 @media (max-width: 640px) {

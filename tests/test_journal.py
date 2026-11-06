@@ -327,7 +327,7 @@ def test_sold_row_keeps_account_currency_and_item(journal, acc, acc2):
     journal.edit(lot, account_id=acc2)  # продаж нет — можно (исправление ошибки)
     journal.sell(lot, 2, 2000, D("2026-01-05"))
     for change in ({"account_id": acc}, {"currency": USD}, {"market_hash_name": "AK"}):
-        with pytest.raises(JournalError, match="уже продавали"):
+        with pytest.raises(JournalError, match="позиции с ID 1 редактировать нельзя"):
             journal.edit(lot, **change)
     journal.edit(lot, price=900)  # цена, дата, количество — по-прежнему правятся
     assert journal.op(lot).price == 900

@@ -221,7 +221,7 @@ def steam_rates(conn: sqlite3.Connection) -> dict[str, Any]:
 
 def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1, ops: list[Op] | None = None) -> dict[str, Any]:
     """«Закрытые позиции»: строка на каждую продажу — что продано, по какой цене покупки, с какой доходностью.
-    Комментарий — у продажи, если он есть, иначе у строки, из которой продано."""
+    Комментарий — свой у продажи (вводится при «Продано»), из строки портфеля не копируется."""
     account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
     by_id = {op.id: op for op in ops or []}
     items = _items(conn, {s.key.market_hash_name for s in ledger.sales})
@@ -229,7 +229,7 @@ def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1, ops: 
     for s in ledger.sales:
         name, account_id, currency, lot = s.key
         sale, bought = by_id.get(s.op_id), by_id.get(lot)
-        comment = (sale.comment if sale and sale.comment else bought.comment if bought else "")
+        comment = sale.comment if sale else ""
         rows.append({
             "op_id": s.op_id,
             "item": name,

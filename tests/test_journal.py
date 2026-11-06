@@ -325,10 +325,14 @@ def test_new_position_id_fills_erased_gaps(journal, acc, acc2):
 def test_date_messages_and_purchase_date_after_partial_transfer(journal, acc, acc2):
     lot = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))
     sale = journal.sell(lot, 2, 2000, D("2026-01-20"))
-    with pytest.raises(JournalError, match=r"^Дата продажи \(05\.01\.2026\) не может быть раньше даты покупки позиции с ID 1 \(10\.01\.2026\)\.$"):
+    with pytest.raises(JournalError) as err:
         journal.edit(sale, op_date=D("2026-01-05"))
-    with pytest.raises(JournalError, match=r"^Дата продажи \(20\.01\.2026\) не может быть раньше даты покупки позиции с ID 1 \(25\.01\.2026\)\.$"):
+    assert str(err.value) == ("Дата продажи (05.01.2026) не может быть раньше даты покупки позиции с ID 1 (10.01.2026). "
+                              "При необходимости, удалите продажу и измените дату покупки во вкладке «Текущий портфель»")
+    with pytest.raises(JournalError) as err:
         journal.edit(lot, op_date=D("2026-01-25"))
+    assert str(err.value) == ("Дата покупки (25.01.2026) не может быть позже даты продажи позиции с ID 1 (20.01.2026). "
+                              "При необходимости, измените дату продажи во вкладке «Закрытые позиции»")
     # перенос части 15.01, потом дату покупки исходной позиции сдвинули на 18.01 — это разрешено:
     # перенесённая часть — уже отдельная позиция
     other = journal.buy(CASE, acc, RUB, 10, 1000, D("2026-01-10"))

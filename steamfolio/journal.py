@@ -213,7 +213,7 @@ class Journal:
         followers = [replace(op, **same) for op in ops if op.kind in ("sell", "transfer") and lot_of(op) == op_id]
         changed = {op.id: op for op in [after, *followers]}
         new_ops = [changed.get(op.id, op) for op in ops]
-        self._check_dates(replay(new_ops), replay(ops), new_ops)
+        self._check_dates(replay(new_ops), replay(ops), new_ops, target.kind)
         before_violations = {(v.op_id, v.message) for v in replay(ops).violations}
         same_lot = {op.id for op in new_ops if lot_of(op) == target.target_id and op.kind in ("sell", "transfer")}
         if target.kind == "sell" and any(v.op_id in same_lot and (v.op_id, v.message) not in before_violations
@@ -227,7 +227,7 @@ class Journal:
             raise JournalError(
                 f"Количество продаваемых предметов по позиции с ID {no} не может превышать количество купленного "
                 f"по данной позиции ({bought}). См. «Текущий портфель», позиция ID {no}.")
-        self._check(ops, new_ops, f"{KIND_NAMES[target.kind]} не изменена")
+        self._check(ops, new_ops, f"{KIND_NAMES[target.kind]} не изменена", target.kind)
         with self.conn:
             for op in changed.values():
                 self.conn.execute(
@@ -303,16 +303,17 @@ class Journal:
 
     # ---------- внутреннее ----------
 
-    def _check(self, before_ops: list[Op], after_ops: list[Op], action: str) -> None:
+    def _check(self, before_ops: list[Op], after_ops: list[Op], action: str, edited: str = "sell") -> None:
         after, before = replay(after_ops), replay(before_ops)
-        self._check_dates(after, before, after_ops)
+        self._check_dates(after, before, after_ops, edited)
         problems = self._describe_violations(after, before)
         if problems:
             raise JournalError(f"{action}: противоречит другим записям", problems)
 
     @staticmethod
-    def _check_dates(after: Ledger, before: Ledger, after_ops: list[Op]) -> None:
-        """Продажа раньше покупки своей позиции — понятным текстом (дату продажи или покупки сдвинули)."""
+    def _check_dates(after: Ledger, before: Ledger, after_ops: list[Op], edited: str = "sell") -> None:
+        """Продажа раньше покупки своей позиции — понятным текстом. edited — что меняли: дату продажи
+        («Закрытые позиции» или новая продажа) или дату покупки («Текущий портфель»)."""
         known = {(v.op_id, v.message) for v in before.violations}
         by_id = {op.id: op for op in after_ops}
         for v in after.violations:
@@ -320,9 +321,15 @@ class Journal:
             lot = by_id.get(sale.target_id) if sale and sale.kind == "sell" else None
             if (v.op_id, v.message) in known or lot is None or sale.op_date >= lot.op_date:
                 continue
+            if edited == "buy":
+                raise JournalError(
+                    f"Дата покупки ({lot.op_date:%d.%m.%Y}) не может быть позже даты продажи позиции с ID "
+                    f"{lot.position_no} ({sale.op_date:%d.%m.%Y}). При необходимости, измените дату продажи "
+                    "во вкладке «Закрытые позиции»")
             raise JournalError(
                 f"Дата продажи ({sale.op_date:%d.%m.%Y}) не может быть раньше даты покупки позиции с ID "
-                f"{lot.position_no} ({lot.op_date:%d.%m.%Y}).")
+                f"{lot.position_no} ({lot.op_date:%d.%m.%Y}). При необходимости, удалите продажу и измените "
+                "дату покупки во вкладке «Текущий портфель»")
 
     def _add(self, op: Op) -> int:
         ops = self.ops()

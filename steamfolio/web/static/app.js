@@ -1616,12 +1616,12 @@ const SF = (() => {
       const subIndex = (s) => subs.findIndex((x) => x.subtype === s.subtype);
       if (subs) rows.sort((a, b) => subIndex(a) - subIndex(b) || b.value_usd - a.value_usd);
       el("pie-table").innerHTML = !slices.length ? '<div class="empty-state">Портфель пуст</div>'
-        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${subs ? "<th>Подкатегория</th>" : ""}${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th>${level ? "<th>Тип</th>" : ""}</tr></thead><tbody>
+        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${subs ? "<th>Подкатегория</th>" : ""}${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th>${level && !subs ? "<th>Тип</th>" : ""}</tr></thead><tbody>
         ${rows.map((s, i) => level
           ? `<tr><td class="name">${subs ? "" : sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
               ${subs ? `<td>${sw(subCss[s.subtype])}${esc(s.subtype)}</td>` : ""}
               <td class="num">${num(s.quantity, 0)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td>
-              <td><select data-item="${esc(s.item)}" aria-label="Тип предмета">${typeNames.map((t) => `<option ${t === s.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></td></tr>`
+              ${subs ? "" : `<td><select data-item="${esc(s.item)}" aria-label="Тип предмета">${typeNames.map((t) => `<option ${t === s.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></td>`}</tr>`
           : `<tr class="clickable" data-type="${esc(s.type)}"><td>${sw(colors[i])}${esc(s.type)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`).join("")}
         </tbody></table>`;
       el("pie-table").querySelectorAll("tr[data-type]").forEach((tr) => tr.onclick = () => { drill = tr.dataset.type; renderPie(); });

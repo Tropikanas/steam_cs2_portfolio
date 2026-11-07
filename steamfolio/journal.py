@@ -225,8 +225,8 @@ class Journal:
             lot = ledger.lot(target.target_id)
             bought = (lot.quantity if lot else 0) + sum(s.quantity for s in ledger.sales if s.key.lot == target.target_id)
             raise JournalError(
-                f"Количество продаваемых предметов по позиции с ID {no} не может превышать количество купленного "
-                f"по данной позиции ({bought}). См. «Текущий портфель», позиция ID {no}.")
+                f"Количество продаваемых предметов по позиции с ID {no} не может превышать общее количество купленного "
+                f"по данной позиции ({bought} шт.). См. «Текущий портфель», позиция ID {no}.")
         self._check(ops, new_ops, f"{KIND_NAMES[target.kind]} не изменена", target.kind)
         with self.conn:
             for op in changed.values():

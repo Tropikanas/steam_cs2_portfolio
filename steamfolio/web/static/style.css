@@ -269,7 +269,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .4); }
 dialog form { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
 dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
-.field > span { font-size: 12px; color: var(--muted); }
+/* подпись поля; поле даты — тоже span внутри .field, но это само поле, а не подпись */
+.field > span:not(.date-field) { font-size: 12px; color: var(--muted); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 480px) { .field-row { grid-template-columns: 1fr; } }
 .info { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; }

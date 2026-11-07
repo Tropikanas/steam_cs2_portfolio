@@ -37,6 +37,7 @@ def test_classify():
     for c in catalog.ARMORY_COLLECTIONS:
         assert catalog.classify("stickers.json", {"crates": [{"name": c}]}) == catalog.ARMORY_STICKERS
     assert catalog.category(catalog.ARMORY_STICKERS) == catalog.STICKERS
+    assert catalog.classify("stickers.json", {"crates": [{"name": "Sugarface Capsule"}]}) == catalog.OTHER_STICKERS
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Gloves"}}) == catalog.GLOVES
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Knives"}}) == catalog.KNIVES
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Rifles"}}) == catalog.WEAPONS

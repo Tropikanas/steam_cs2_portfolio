@@ -92,10 +92,9 @@ def _names(value: Any) -> list[str]:
 # «Сёрфинг в хищных водах» (магазин операции Riptide), «Отдача».
 OPERATION_COLLECTIONS = {"Broken Fang Sticker Collection", "Shattered Web Sticker Collection",
                          "Riptide Surf Shop Sticker Collection", "Recoil Sticker Collection"}
-# Коллекции, которые выпускались только в Арсенале (Armory): «Собери стихию», «Собери человечка», Sugarface,
-# Sugarface 2, Auto Racing, Fruits And Veggies, 2025 Community.
-ARMORY_COLLECTIONS = {"Elemental Craft Sticker Pack", "Character Craft Sticker Pack", "Sugarface Capsule",
-                      "Sugarface 2 Sticker Collection", "Auto Racing Sticker Collection",
+# Коллекции, которые выпускались только в Арсенале (Armory): «Собери стихию», «Собери человечка», Sugarface 2,
+# Auto Racing, Fruits And Veggies, 2025 Community. Первая Sugarface Capsule — обычная капсула, в «иных».
+ARMORY_COLLECTIONS = {"Elemental Craft Sticker Pack", "Character Craft Sticker Pack", "Sugarface 2 Sticker Collection", "Auto Racing Sticker Collection",
                       "Fruits And Veggies Sticker Collection", "2025 Community Sticker Collection"}
 
 

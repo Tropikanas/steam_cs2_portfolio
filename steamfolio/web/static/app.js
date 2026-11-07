@@ -380,10 +380,27 @@ const SF = (() => {
     const list = document.createElement("div");
     list.className = "multi-list date-filter";
     list.owner = btn;
+    // Крестик в поле активного фильтра (левее «▾») — сбросить фильтр.
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "filter-clear hidden";
+    clear.textContent = "×";
+    clear.title = "Сбросить фильтр";
+    clear.setAttribute("aria-label", `Сбросить фильтр: ${col.title}`);
+    wrap.classList.add("has-clear");
+    wrap.append(clear);
+    clear.onclick = () => {
+      delete filters[col.id];
+      if (openList === list) closeList();
+      sync();
+      render();
+    };
     const sync = () => {
-      btn.textContent = dateFilterLabel(filters[col.id]) + " ▾";
-      btn.title = filterSet(filters[col.id]) ? filterText(filters[col.id]) : "";
-      btn.classList.toggle("set", filterSet(filters[col.id]));
+      const set = filterSet(filters[col.id]);
+      btn.innerHTML = `<span class="multi-label">${esc(dateFilterLabel(filters[col.id]))}</span><span class="multi-arrow">▾</span>`;
+      btn.title = set ? filterText(filters[col.id]) : "";
+      btn.classList.toggle("set", set);
+      clear.classList.toggle("hidden", !set);
     };
     btn.onclick = () => {
       if (openList === list) { closeList(); return; }
@@ -392,8 +409,7 @@ const SF = (() => {
       list.innerHTML = `<select data-mode aria-label="Что выбрать">${DATE_MODES.map(([v, t]) =>
         `<option value="${v}" ${v === f.mode ? "selected" : ""}>${t}</option>`).join("")}</select>
         <label data-from><span></span><input type="date" value="${esc(f.from || "")}"></label>
-        <label data-to><span></span><input type="date" value="${esc(f.to || "")}"></label>
-        <button type="button" class="link small" data-reset>Сбросить</button>`;
+        <label data-to><span></span><input type="date" value="${esc(f.to || "")}"></label>`;
       const mode = list.querySelector("[data-mode]");
       const [fromIn, toIn] = ["[data-from] input", "[data-to] input"].map((s) => list.querySelector(s));
       const layout = () => {
@@ -411,10 +427,6 @@ const SF = (() => {
       };
       mode.onchange = () => { layout(); apply(); };
       [fromIn, toIn].forEach((i) => i.addEventListener("input", apply));
-      list.querySelector("[data-reset]").onclick = () => {
-        fromIn.value = toIn.value = "";
-        apply();
-      };
       layout();
       showList(list, btn);
       enhanceDatesIn(list);

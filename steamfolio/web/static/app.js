@@ -865,7 +865,7 @@ const SF = (() => {
       const what = { price: "Цена покупки", date: "Дата покупки" }[field];
       if (field !== "quantity" && !what) return Promise.resolve(true);
       return confirmDialog("Позиция уже частично продана", field === "quantity"
-        ? head + "Вы уверены, что с учётом проданного общее количество будет верным?"
+        ? head + "Вы уверены, что с учётом проданного общее количество закупленного будет верным?"
         : head + `Если продолжить, ${what} на вкладке «Закрытые позиции» изменится, статистика пересчитается, продолжаем?`, "Да");
     }
 
@@ -1438,10 +1438,16 @@ const SF = (() => {
       // Оценка портфеля лежит слоем поверх реализованной прибыли: y = оценка + прибыль на этот момент,
       // настоящее значение — в v (его показывает подсказка). «Вложено» — отдельная линия без заливки.
       const profit = (s.profit || []).some(([, y]) => y) ? s.profit : [];
+      // Прибыль между точками — по прямой, как и её линия: слой оценки ложится ровно на неё.
       const profitAt = (x) => {
-        let p = 0;
-        for (const [px, py] of profit) { if (px > x) break; p = py; }
-        return p;
+        if (!profit.length || x < profit[0][0]) return 0;
+        for (let i = 1; i < profit.length; i++) {
+          const [x1, y1] = profit[i];
+          if (x1 < x) continue;
+          const [x0, y0] = profit[i - 1];
+          return x1 === x0 ? y1 : y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+        }
+        return profit[profit.length - 1][1];
       };
       const ds = (label, points, color, extra = {}, stacked = false) => ({
         label, data: points.map(([x, v]) => ({ x, y: stacked ? v + profitAt(x) : v, v })),
@@ -1455,10 +1461,10 @@ const SF = (() => {
       const profitLabel = (v) => v < 0 ? "Реализованный убыток" : "Реализованная прибыль";
       const datasets = [
         ds(profitLabel(profit.length ? profit[profit.length - 1][1] : 0), profit, PROFIT,
-          { stepped: "before", backgroundColor: alpha(PROFIT, 0.25), isProfit: true }),
+          { backgroundColor: alpha(PROFIT, 0.25), isProfit: true }),
         ds("Текущая оценка портфеля", s.value, VALUE, { fill: onProfit }, true),
         ds("Оценка по истории продаж Steam", s.value_estimate, VALUE, { fill: onProfit, borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.08) }, true),
-        ds("Вложено", s.invested, INVESTED, { stepped: "before", fill: false, borderWidth: 2.5 }),
+        ds("Вложено", s.invested, INVESTED, { fill: false, borderWidth: 2.5 }),
       ].filter((d) => d.data.length);
       const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
       // Окно: [конец − ширина, конец]. Ширина — выбранный период или участок, выделенный двумя щелчками.
@@ -1515,14 +1521,14 @@ const SF = (() => {
       nav = pannable ? { first, last, span, clampEnd, fmtDay } : null;
       el("line-nav").classList.toggle("hidden", !nav);
       if (nav) moveWindow(end);
-      const scope = chartCurrency === "TOTAL" ? "Все операции, суммы в USD по курсу на дату. "
-        : `Только строки в ${cur}, суммы в ${cur} без пересчёта. `;
+      const scope = chartCurrency === "TOTAL"
+        ? "Отражены все позиции. Текущая оценка портфеля взята по лучшему ордеру на покупку на ТП Steam (в USD). "
+          + "«Вложено» и «Реализованная прибыль/убыток» берутся с графиков конкретных валют посредством пересчёта этих валют в USD по курсу на конкретные даты."
+        : `Отражены только позиции с валютой ${cur}. Текущая оценка портфеля взята по лучшему ордеру на покупку на ТП Steam (в валюте ${cur}).`;
       el("line-note").textContent = !datasets.length
         ? (chartCurrency === "TOTAL" ? "Данных пока нет — внесите покупки на вкладке «Портфолио»." : `Позиций в ${cur} нет.`)
-        : scope + (s.value_estimate.length ? `До ${date(s.launch)} оценка портфеля — по медианным ценам продаж Steam (пунктир); дальше — по лучшему ордеру на покупку, точка раз в 6 часов.`
-        : "Оценка портфеля — по лучшему ордеру на покупку, точка раз в 6 часов.")
-          + " Реализованная прибыль (в минусе — убыток) — нарастающим итогом по продажам: цена продажи минус средняя цена покупки."
-          + (profit.length ? " Оценка портфеля нарисована слоем поверх прибыли: верхний край синей заливки — их сумма." : "");
+        : scope + "\nРеализованная прибыль/убыток + Текущая оценка портфеля дают общую оценку портфеля на текущий момент, "
+          + "которая может быть больше или меньше суммы вложенных средств (линия «Вложено»).";
     }
 
     async function loadSeries() {

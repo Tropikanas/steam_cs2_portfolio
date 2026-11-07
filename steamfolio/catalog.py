@@ -24,6 +24,7 @@ CAPSULES = "Капсулы с наклейками"
 SOUVENIRS = "Сувенирные наборы"
 TOURNAMENT_STICKERS = "Наклейки турниров"
 OPERATION_STICKERS = "Наклейки операций"
+ARMORY_STICKERS = "Стикеры Armory"
 OTHER_STICKERS = "Наклейки иные"
 PATCHES = "Нашивки"
 AGENTS = "Агенты"
@@ -32,14 +33,14 @@ KNIVES = "Ножи"
 GLOVES = "Перчатки"
 OTHER = "Прочее"
 # Тип предмета (его можно поменять вручную) — самый мелкий уровень; категория диаграммы выводится из него.
-TYPES = (CASES, CAPSULES, SOUVENIRS, TOURNAMENT_STICKERS, OPERATION_STICKERS, OTHER_STICKERS, PATCHES, AGENTS,
-         WEAPONS, KNIVES, GLOVES, OTHER)
+TYPES = (CASES, CAPSULES, SOUVENIRS, TOURNAMENT_STICKERS, OPERATION_STICKERS, ARMORY_STICKERS, OTHER_STICKERS,
+         PATCHES, AGENTS, WEAPONS, KNIVES, GLOVES, OTHER)
 
 STICKERS = "Наклейки"
 KNIVES_GLOVES = "Ножи и перчатки"
 # Категории круговой диаграммы по порядку; у части — подкатегории (у агентов и оружия — по редкости).
 CATEGORIES = (CASES, CAPSULES, SOUVENIRS, STICKERS, PATCHES, AGENTS, WEAPONS, KNIVES_GLOVES, OTHER)
-PARENT = {TOURNAMENT_STICKERS: STICKERS, OPERATION_STICKERS: STICKERS, OTHER_STICKERS: STICKERS,
+PARENT = {TOURNAMENT_STICKERS: STICKERS, OPERATION_STICKERS: STICKERS, ARMORY_STICKERS: STICKERS, OTHER_STICKERS: STICKERS,
           KNIVES: KNIVES_GLOVES, GLOVES: KNIVES_GLOVES}
 BY_RARITY = (AGENTS, WEAPONS)
 
@@ -87,9 +88,15 @@ def _names(value: Any) -> list[str]:
 
 
 # Коллекции наклеек операций, в названии которых нет слова «Operation» (остальные узнаются по нему:
-# Operation Riptide Sticker Collection). Riptide Surf Shop — магазин операции Riptide.
+# Operation Riptide Sticker Collection — «Хищные воды»). Названия в клиенте: «Сломанный клык», «Расколотая сеть»,
+# «Сёрфинг в хищных водах» (магазин операции Riptide), «Отдача».
 OPERATION_COLLECTIONS = {"Broken Fang Sticker Collection", "Shattered Web Sticker Collection",
-                         "Riptide Surf Shop Sticker Collection"}
+                         "Riptide Surf Shop Sticker Collection", "Recoil Sticker Collection"}
+# Коллекции, которые выпускались только в Арсенале (Armory): «Собери стихию», «Собери человечка», Sugarface,
+# Sugarface 2, Auto Racing, Fruits And Veggies, 2025 Community.
+ARMORY_COLLECTIONS = {"Elemental Craft Sticker Pack", "Character Craft Sticker Pack", "Sugarface Capsule",
+                      "Sugarface 2 Sticker Collection", "Auto Racing Sticker Collection",
+                      "Fruits And Veggies Sticker Collection", "2025 Community Sticker Collection"}
 
 
 def classify(file: str, item: dict[str, Any]) -> str:
@@ -106,6 +113,8 @@ def classify(file: str, item: dict[str, Any]) -> str:
         if item.get("tournament"):
             return TOURNAMENT_STICKERS
         sources = _names(item.get("crates")) + _names(item.get("collections"))
+        if any(s in ARMORY_COLLECTIONS for s in sources):
+            return ARMORY_STICKERS
         if any("Operation" in s or s in OPERATION_COLLECTIONS for s in sources):
             return OPERATION_STICKERS
         return OTHER_STICKERS

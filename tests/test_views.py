@@ -31,8 +31,12 @@ def test_classify():
     assert catalog.classify("stickers.json", {"tournament": {"name": "Austin 2025"}}) == catalog.TOURNAMENT_STICKERS
     assert catalog.classify("stickers.json", {"crates": [{"name": "Operation Riptide Sticker Collection"}]}) == catalog.OPERATION_STICKERS
     assert catalog.classify("stickers.json", {"crates": [{"name": "Community Sticker Capsule 1"}]}) == catalog.OTHER_STICKERS
-    for c in ("Broken Fang Sticker Collection", "Shattered Web Sticker Collection", "Riptide Surf Shop Sticker Collection"):
+    for c in ("Broken Fang Sticker Collection", "Shattered Web Sticker Collection", "Riptide Surf Shop Sticker Collection",
+              "Recoil Sticker Collection"):
         assert catalog.classify("stickers.json", {"collections": [{"name": c}]}) == catalog.OPERATION_STICKERS
+    for c in catalog.ARMORY_COLLECTIONS:
+        assert catalog.classify("stickers.json", {"crates": [{"name": c}]}) == catalog.ARMORY_STICKERS
+    assert catalog.category(catalog.ARMORY_STICKERS) == catalog.STICKERS
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Gloves"}}) == catalog.GLOVES
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Knives"}}) == catalog.KNIVES
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Rifles"}}) == catalog.WEAPONS

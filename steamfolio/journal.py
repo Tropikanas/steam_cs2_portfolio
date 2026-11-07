@@ -81,7 +81,7 @@ class Journal:
             "SELECT * FROM operations WHERE id = ? AND portfolio_id = ?", (op_id, self.portfolio_id)
         ).fetchone()
         if row is None:
-            raise JournalError(f"запись #{op_id} не найдена")
+            raise JournalError(f"Запись #{op_id} не найдена")
         return Op.from_row(row)
 
     def orders(self) -> list[Order]:
@@ -122,10 +122,10 @@ class Journal:
         self._check_trade(lot.market_hash_name, lot.account_id, lot.currency, quantity, 0, op_date)
         self._check_account(to_account_id)
         if to_account_id == lot.account_id:
-            raise JournalError("аккаунты «откуда» и «куда» совпадают")
+            raise JournalError("Аккаунты «откуда» и «куда» совпадают")
         src = self.ledger().lot(lot_id)
         if src is None or src.quantity < quantity:
-            raise JournalError(f"перенос {quantity} шт. «{lot.market_hash_name}» при остатке {src.quantity if src else 0} шт.")
+            raise JournalError(f"Перенос {quantity} шт. «{lot.market_hash_name}» при остатке {src.quantity if src else 0} шт.")
         if quantity == src.bought:
             # Переносится вся позиция, из неё ничего не продавали и не переносили: та же строка с тем же ID
             # просто переезжает на другой аккаунт (комментарий — из формы).
@@ -150,7 +150,7 @@ class Journal:
         уменьшается перенос и стирается остаток в исходной строке. Возвращает, сколько штук стёрто."""
         pos = self.ledger().lot(lot_id)
         if pos is None or pos.quantity == 0:
-            raise JournalError("в этой строке ничего не осталось")
+            raise JournalError("В этой строке ничего не осталось")
         count = pos.quantity
         ops = self.ops()
         by_id = {op.id: op for op in ops}
@@ -181,9 +181,9 @@ class Journal:
         target = self._record(op_id)
         unknown = set(changes) - set(EDITABLE_FIELDS)
         if unknown:
-            raise JournalError(f"нельзя изменить поля: {', '.join(sorted(unknown))}")
+            raise JournalError(f"Нельзя изменить поля: {', '.join(sorted(unknown))}")
         if target.kind == "sell" and {"market_hash_name", "account_id", "currency"} & set(changes):
-            raise JournalError("у продажи предмет, аккаунт и валюта — как у строки, из которой продано")
+            raise JournalError("У продажи предмет, аккаунт и валюта — как у строки, из которой продано")
         moves = {k for k in ("market_hash_name", "account_id", "currency")
                  if k in changes and changes[k] != getattr(target, k) and not (k == "currency" and Currency(changes[k]) == target.currency)}
         if target.kind == "buy" and moves and any(op.kind == "sell" and op.target_id == op_id for op in self.ops()):
@@ -207,7 +207,7 @@ class Journal:
             rate, source = self._rate(after.currency, after.op_date, None)
             after = replace(after, fx_rate=rate, fx_source=source)
         if target.fields() == after.fields():
-            raise JournalError("ничего не изменилось")
+            raise JournalError("Ничего не изменилось")
         ops = self.ops()
         same = {"market_hash_name": after.market_hash_name, "account_id": after.account_id, "currency": after.currency}
         followers = [replace(op, **same) for op in ops if op.kind in ("sell", "transfer") and lot_of(op) == op_id]
@@ -284,7 +284,7 @@ class Journal:
         order = self._order(order_id)
         quantity = order.quantity if quantity is None else quantity
         if quantity > order.quantity:
-            raise JournalError(f"куплено {quantity} шт. — больше, чем в ордере ({order.quantity} шт.)")
+            raise JournalError(f"Куплено {quantity} шт. — больше, чем в ордере ({order.quantity} шт.)")
         op_id = self.buy(order.market_hash_name, order.account_id, order.currency, quantity,
                          order.price if price is None else price, op_date, comment=order.comment.strip(),
                          fx_rate=fx_rate)
@@ -308,7 +308,7 @@ class Journal:
         self._check_dates(after, before, after_ops, edited)
         problems = self._describe_violations(after, before)
         if problems:
-            raise JournalError(f"{action}: противоречит другим записям", problems)
+            raise JournalError(f"{action[:1].upper()}{action[1:]}: противоречит другим записям", problems)
 
     @staticmethod
     def _check_dates(after: Ledger, before: Ledger, after_ops: list[Op], edited: str = "sell") -> None:
@@ -394,7 +394,7 @@ class Journal:
         """Покупка или продажа, которую можно изменить или удалить."""
         op = self.op(op_id)
         if op.kind not in ("buy", "sell"):
-            raise JournalError(f"изменять и удалять можно только покупки и продажи, а #{op_id} — {KIND_NAMES[op.kind]}")
+            raise JournalError(f"Изменять и удалять можно только покупки и продажи, а #{op_id} — {KIND_NAMES[op.kind]}")
         return op
 
     def _order(self, order_id: int) -> Order:
@@ -402,25 +402,25 @@ class Journal:
             "SELECT * FROM orders WHERE id = ? AND portfolio_id = ?", (order_id, self.portfolio_id)
         ).fetchone()
         if row is None:
-            raise JournalError(f"ордер #{order_id} не найден среди выставленных")
+            raise JournalError(f"Ордер #{order_id} не найден среди выставленных")
         return Order.from_row(row)
 
     def _rate(self, currency: Currency, op_date: date, fx_rate: Decimal | None) -> tuple[Decimal, str]:
         if fx_rate is not None:
             if Decimal(fx_rate) <= 0:
-                raise JournalError("курс должен быть больше нуля")
+                raise JournalError("Курс должен быть больше нуля")
             return Decimal(fx_rate), "manual"
         return self.fx.rate(currency, op_date)
 
     def _check_trade(self, item: str | None, account_id: int | None, currency: Currency | None,
                      quantity: int | None, price: int | None, op_date: date) -> None:
         if not item:
-            raise JournalError("не указан предмет")
+            raise JournalError("Не указан предмет")
         if currency not in USER_CURRENCIES:
-            raise JournalError("валюта должна быть одной из валют Steam")
+            raise JournalError("Валюта должна быть одной из валют Steam")
         self._check_account(account_id)
         if op_date > today_msk():
-            raise JournalError("дата операции в будущем")
+            raise JournalError("Дата операции в будущем")
         self._check_amounts(quantity, price)
 
     def _check_account(self, account_id: int | None) -> None:
@@ -428,24 +428,24 @@ class Journal:
             "SELECT 1 FROM accounts WHERE id = ? AND portfolio_id = ?", (account_id, self.portfolio_id)
         ).fetchone()
         if account is None:
-            raise JournalError(f"аккаунт #{account_id} не найден")
+            raise JournalError(f"Аккаунт #{account_id} не найден")
 
     @staticmethod
     def _check_amounts(quantity: int | None, price: int | None) -> None:
         if not isinstance(quantity, int) or quantity <= 0:
             raise JournalError("Количество должно быть целым больше нуля")
         if not isinstance(price, int) or price < 0:
-            raise JournalError("цена не может быть отрицательной")
+            raise JournalError("Цена не может быть отрицательной")
 
 
 def create_account(conn: sqlite3.Connection, name: str, portfolio_id: int = 1) -> int:
     name = name.strip()
     if not name:
-        raise JournalError("пустое название аккаунта")
+        raise JournalError("Пустое название аккаунта")
     try:
         with conn:
             return conn.execute(
                 "INSERT INTO accounts (portfolio_id, name, created_at) VALUES (?, ?, ?)", (portfolio_id, name, utcnow())
             ).lastrowid
     except sqlite3.IntegrityError as e:
-        raise JournalError(f"аккаунт «{name}» уже есть") from e
+        raise JournalError(f"Аккаунт «{name}» уже есть") from e

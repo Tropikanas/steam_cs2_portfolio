@@ -100,7 +100,7 @@ def test_edit_and_delete_records(client):
     assert client.post(f"/api/ops/{buy}/edit", json={"price": "12", "quantity": 10}).status_code == 200
     [pos] = rows_of(client)
     assert (pos["avg_price"], pos["quantity"], pos["bought"], pos["single_op"]["op_id"]) == (12.0, 6, 10, buy)
-    assert client.post(f"/api/ops/{buy}/edit", json={"price": "12"}).json()["error"] == "ничего не изменилось"
+    assert client.post(f"/api/ops/{buy}/edit", json={"price": "12"}).json()["error"] == "Ничего не изменилось"
     # удаление продажи — насовсем, штуки возвращаются в свою строку
     assert client.post(f"/api/ops/{sale}/delete").status_code == 200
     assert rows_of(client)[0]["quantity"] == 10

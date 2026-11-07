@@ -39,13 +39,13 @@ class AlertSettings:
 
     def validate(self) -> None:
         if not (0 < self.day_pct <= 1000 and 0 < self.week2_pct <= 10000 and 0 < self.week3_pct <= 10000):
-            raise ValueError("пороги в процентах должны быть больше нуля")
+            raise ValueError("Пороги в процентах должны быть больше нуля")
         if self.week3_pct <= self.week2_pct:
-            raise ValueError("порог «×3 за неделю» должен быть больше порога «×2 за неделю»")
+            raise ValueError("Порог «×3 за неделю» должен быть больше порога «×2 за неделю»")
         if not 0 <= self.min_price_usd <= 100000:
-            raise ValueError("минимальная цена не может быть отрицательной")
+            raise ValueError("Минимальная цена не может быть отрицательной")
         if not 1 <= self.cooldown_hours <= 24 * 30:
-            raise ValueError("антиспам — от 1 часа до 30 дней")
+            raise ValueError("Антиспам — от 1 часа до 30 дней")
 
 
 def load_settings(conn: sqlite3.Connection) -> AlertSettings:

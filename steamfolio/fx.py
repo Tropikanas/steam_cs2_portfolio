@@ -32,7 +32,7 @@ def parse_cbr(xml: bytes) -> dict[Currency, Decimal]:
         rub_per_unit[code] = value / nominal
     usd = rub_per_unit.get("USD")
     if not usd:
-        raise FxUnavailable("в ответе ЦБ нет курса доллара")
+        raise FxUnavailable("В ответе ЦБ нет курса доллара")
     rates = {Currency.RUB: usd}
     # ЦБ публикует не все валюты Steam — для остальных курс до начала истории Steam вводится вручную.
     for currency in Currency:
@@ -107,5 +107,5 @@ class FxResolver:
                 [(day.isoformat(), int(c), str(r)) for c, r in rates.items()],
             )
         if currency not in rates:
-            raise FxUnavailable(f"у ЦБ нет курса {currency.name} на {day:%d.%m.%Y}")
+            raise FxUnavailable(f"У ЦБ нет курса {currency.name} на {day:%d.%m.%Y}")
         return rates[currency]

@@ -30,13 +30,13 @@ def verify_password(password: str, stored: str | None) -> bool:
 
 def set_password(conn: sqlite3.Connection, login: str, password: str) -> None:
     if len(password) < 10:
-        raise ValueError("пароль короче 10 символов")
+        raise ValueError("Пароль короче 10 символов")
     with conn:
         updated = conn.execute(
             "UPDATE users SET password_hash = ? WHERE login = ?", (hash_password(password), login)
         ).rowcount
         if not updated:
-            raise ValueError(f"пользователь {login!r} не найден")
+            raise ValueError(f"Пользователь {login!r} не найден")
         # Новый пароль закрывает все старые сессии.
         conn.execute("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE login = ?)", (login,))
 

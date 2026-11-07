@@ -44,9 +44,9 @@ def money(value: str | float | int) -> int:
     try:
         amount = Decimal(str(value).replace(" ", "").replace(" ", "").replace(",", "."))
     except InvalidOperation as e:
-        raise ApiError(f"не число: {value!r}") from e
+        raise ApiError(f"Не число: {value!r}") from e
     if amount < 0 or amount != amount.quantize(Decimal("0.01")):
-        raise ApiError(f"сумма должна быть неотрицательной, не больше двух знаков после запятой: {value}")
+        raise ApiError(f"Сумма должна быть неотрицательной, не больше двух знаков после запятой: {value}")
     return int(amount * 100)
 
 
@@ -56,9 +56,9 @@ def rate(value: str | None) -> Decimal | None:
     try:
         result = Decimal(str(value).replace(",", "."))
     except InvalidOperation as e:
-        raise ApiError(f"курс не число: {value!r}") from e
+        raise ApiError(f"Курс не число: {value!r}") from e
     if result <= 0:
-        raise ApiError("курс должен быть больше нуля")
+        raise ApiError("Курс должен быть больше нуля")
     return result
 
 
@@ -66,9 +66,9 @@ def currency(code: str) -> Currency:
     try:
         cur = Currency[code]
     except KeyError as e:
-        raise ApiError(f"неизвестная валюта {code}") from e
+        raise ApiError(f"Неизвестная валюта {code}") from e
     if cur not in USER_CURRENCIES:
-        raise ApiError(f"неизвестная валюта {code}")
+        raise ApiError(f"Неизвестная валюта {code}")
     return cur
 
 
@@ -436,7 +436,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         if body.comment is not None and body.comment.strip() != current.comment:
             changes["comment"] = body.comment.strip()
         if not changes:
-            raise ApiError("ничего не изменилось")
+            raise ApiError("Ничего не изменилось")
         return {"op_id": j.edit(op_id, **changes)}
 
     @app.post("/api/ops/{op_id}/delete")
@@ -474,7 +474,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         except telegram.TelegramError as e:
             raise ApiError(f"Telegram ответил ошибкой: {e}") from e
         if not sent:
-            raise ApiError("бот не подключён: на сервере выполните steamfolio telegram setup")
+            raise ApiError("Бот не подключён: на сервере выполните steamfolio telegram setup")
         return {"ok": True}
 
     @app.post("/api/settings/backup-send")
@@ -484,7 +484,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
         except telegram.TelegramError as e:
             raise ApiError(f"Telegram ответил ошибкой: {e}") from e
         if not sent:
-            raise ApiError("бот не подключён: на сервере выполните steamfolio telegram setup")
+            raise ApiError("Бот не подключён: на сервере выполните steamfolio telegram setup")
         return {"ok": True}
 
     # ---------- API: аккаунты ----------
@@ -501,12 +501,12 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
                 if body.name is not None:
                     name = body.name.strip()[:60]
                     if not name:
-                        raise ApiError("пустое название аккаунта")
+                        raise ApiError("Пустое название аккаунта")
                     conn.execute("UPDATE accounts SET name = ? WHERE id = ?", (name, account_id))
                 if body.hidden is not None:
                     conn.execute("UPDATE accounts SET hidden = ? WHERE id = ?", (int(body.hidden), account_id))
         except sqlite3.IntegrityError as e:
-            raise ApiError("аккаунт с таким названием уже есть") from e
+            raise ApiError("Аккаунт с таким названием уже есть") from e
         return {"ok": True}
 
     @app.post("/api/accounts/{account_id}/delete")
@@ -517,7 +517,7 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
                UNION SELECT 1 FROM orders WHERE account_id = ? LIMIT 1""", (account_id, account_id, account_id)
         ).fetchone()
         if used:
-            raise ApiError("по аккаунту есть операции — его можно только скрыть")
+            raise ApiError("По аккаунту есть операции — его можно только скрыть")
         with conn:
             conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         return {"ok": True}
@@ -527,6 +527,6 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
             "SELECT 1 FROM accounts WHERE id = ? AND portfolio_id = ?", (account_id, PORTFOLIO_ID)
         ).fetchone()
         if row is None:
-            raise ApiError("аккаунт не найден", status=404)
+            raise ApiError("Аккаунт не найден", status=404)
 
     return app

@@ -1312,7 +1312,7 @@ const SF = (() => {
     const VALUE = "#2563eb", INVESTED = "#f59e0b", PROFIT = "#16a34a";
     const el = (id) => document.getElementById(id);
     const signed = signedUsd;
-    let data, lineChart, pieChart, typeNames = [];
+    let data, lineChart, pieChart;
     let period = +store.get("stats.period", "0");
     const DAY = 86400000;
     let panEnd = null;  // конец окна графика, сдвинутый сектором; null — по сегодняшний день
@@ -1616,22 +1616,14 @@ const SF = (() => {
       const subIndex = (s) => subs.findIndex((x) => x.subtype === s.subtype);
       if (subs) rows.sort((a, b) => subIndex(a) - subIndex(b) || b.value_usd - a.value_usd);
       el("pie-table").innerHTML = !slices.length ? '<div class="empty-state">Портфель пуст</div>'
-        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${subs ? "<th>Подкатегория</th>" : ""}${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th>${level && !subs ? "<th>Тип</th>" : ""}</tr></thead><tbody>
+        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${subs ? "<th>Подкатегория</th>" : ""}${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th></tr></thead><tbody>
         ${rows.map((s, i) => level
           ? `<tr><td class="name">${subs ? "" : sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
               ${subs ? `<td>${sw(subCss[s.subtype])}${esc(s.subtype)}</td>` : ""}
-              <td class="num">${num(s.quantity, 0)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td>
-              ${subs ? "" : `<td><select data-item="${esc(s.item)}" aria-label="Тип предмета">${typeNames.map((t) => `<option ${t === s.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></td>`}</tr>`
+              <td class="num">${num(s.quantity, 0)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`
           : `<tr class="clickable" data-type="${esc(s.type)}"><td>${sw(colors[i])}${esc(s.type)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`).join("")}
         </tbody></table>`;
       el("pie-table").querySelectorAll("tr[data-type]").forEach((tr) => tr.onclick = () => { drill = tr.dataset.type; renderPie(); });
-      el("pie-table").querySelectorAll("select[data-item]").forEach((sel) => sel.onchange = async () => {
-        try {
-          await api("POST", "/api/items/type", { item: sel.dataset.item, type: sel.value });
-          toast(`Тип «${sel.dataset.item}»: ${sel.value}`);
-          await load();
-        } catch (e) { toast(e.message, true); }
-      });
     }
 
     function renderBest() {
@@ -1650,7 +1642,6 @@ const SF = (() => {
 
     async function load() {
       data = await api("GET", "/api/stats");
-      typeNames = data.type_names;
       renderSummary();
       // В списке только валюты, которые есть в портфеле, — по убыванию вложенного.
       const codes = data.chart_currencies.map((c) => c.code);

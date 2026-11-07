@@ -140,11 +140,6 @@ class EditIn(BaseModel):
     comment: str | None = None
 
 
-class ItemTypeIn(BaseModel):
-    item: str
-    type: str | None = None  # None — вернуть автоматический тип
-
-
 class AccountIn(BaseModel):
     name: str | None = None
     hidden: bool | None = None
@@ -391,22 +386,12 @@ def create_app(settings: Settings | None = None, cbr_fetch=None, on_demand_price
             "chart_currencies": stats.chart_currencies(ledger),
             "types": stats.types(conn, ledger, PORTFOLIO_ID),
             "sales": stats.best_operations(ledger, ops),
-            "type_names": list(catalog.TYPES),
         }
 
     @app.get("/api/stats/series")
     def stats_series(conn: Conn, user: User, currency: str = "TOTAL") -> dict[str, Any]:
         cur = None if currency.upper() == "TOTAL" else _cur(currency.upper())
         return stats.series(conn, journal(conn, user).ops(), currency=cur)
-
-    @app.post("/api/items/type")
-    def item_type(body: ItemTypeIn, conn: Conn, user: User) -> dict[str, Any]:
-        check_item(conn, body.item)
-        try:
-            catalog.set_type(conn, body.item, body.type or None)
-        except ValueError as e:
-            raise ApiError(str(e)) from e
-        return {"ok": True}
 
     # ---------- API: правка и удаление покупок и продаж ----------
     # Изменение и удаление могут вернуть позицию в портфель или поменять дату — цены и историю подтягиваем сразу.

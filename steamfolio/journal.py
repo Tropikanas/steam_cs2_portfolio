@@ -433,7 +433,7 @@ class Journal:
     @staticmethod
     def _check_amounts(quantity: int | None, price: int | None) -> None:
         if not isinstance(quantity, int) or quantity <= 0:
-            raise JournalError("количество должно быть целым больше нуля")
+            raise JournalError("Количество должно быть целым больше нуля")
         if not isinstance(price, int) or price < 0:
             raise JournalError("цена не может быть отрицательной")
 

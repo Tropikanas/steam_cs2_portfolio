@@ -86,6 +86,12 @@ def _names(value: Any) -> list[str]:
     return [value] if isinstance(value, str) else []
 
 
+# Коллекции наклеек операций, в названии которых нет слова «Operation» (остальные узнаются по нему:
+# Operation Riptide Sticker Collection). Riptide Surf Shop — магазин операции Riptide.
+OPERATION_COLLECTIONS = {"Broken Fang Sticker Collection", "Shattered Web Sticker Collection",
+                         "Riptide Surf Shop Sticker Collection"}
+
+
 def classify(file: str, item: dict[str, Any]) -> str:
     if file == "crates.json":
         kind = item.get("type")
@@ -100,7 +106,7 @@ def classify(file: str, item: dict[str, Any]) -> str:
         if item.get("tournament"):
             return TOURNAMENT_STICKERS
         sources = _names(item.get("crates")) + _names(item.get("collections"))
-        if any("Operation" in s for s in sources):
+        if any("Operation" in s or s in OPERATION_COLLECTIONS for s in sources):
             return OPERATION_STICKERS
         return OTHER_STICKERS
     if file == "skins_not_grouped.json":

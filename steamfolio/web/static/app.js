@@ -1545,15 +1545,15 @@ const SF = (() => {
       "Нашивки": "#4fc3f7", "Агенты": "#f28b82", "Оружие": "#8b5cf6", "Ножи и перчатки": "#d4af37", "Прочее": "#9ca3af",
     };
     const SUB_COLORS = { "Наклейки турниров": "#fde68a", "Наклейки операций": "#f4a7c3", "Наклейки иные": "#a8e6b8" };
-    const GOLD = "#d4af37";
-    const HATCH = { "Ножи": "\\", "Перчатки": "/" };  // наклон линий: ножи — слева-сверху направо-вниз, перчатки — наоборот
+    // Наклон линий: ножи — слева-сверху направо-вниз, перчатки — наоборот; у ножей золото желтее.
+    const HATCH = { "Ножи": { dir: "\\", color: "#f2c230" }, "Перчатки": { dir: "/", color: "#d4af37" } };
     const colorOf = (type) => CATEGORY_COLORS[type] || PALETTE[PALETTE.length - 1];
     // Штриховка для диаграммы (узор canvas) и для квадратика в таблице (CSS).
-    function hatchPattern(dir) {
+    function hatchPattern({ dir, color }) {
       const c = document.createElement("canvas");
       c.width = c.height = 10;
       const g = c.getContext("2d");
-      g.fillStyle = GOLD;
+      g.fillStyle = color;
       g.fillRect(0, 0, 10, 10);
       g.strokeStyle = "rgba(90, 64, 0, .75)";
       g.lineWidth = 1.6;
@@ -1564,7 +1564,7 @@ const SF = (() => {
       g.stroke();
       return g.createPattern(c, "repeat");
     }
-    const hatchCss = (dir) => `repeating-linear-gradient(${dir === "\\" ? 45 : -45}deg, ${GOLD} 0 4px, rgba(90, 64, 0, .75) 4px 5.6px)`;
+    const hatchCss = ({ dir, color }) => `repeating-linear-gradient(${dir === "\\" ? 45 : -45}deg, ${color} 0 4px, rgba(90, 64, 0, .75) 4px 5.6px)`;
     // Цвет подкатегории: {chart — для диаграммы, css — для квадратика}.
     function subColor(s) {
       if (HATCH[s.subtype]) return { chart: hatchPattern(HATCH[s.subtype]), css: hatchCss(HATCH[s.subtype]) };

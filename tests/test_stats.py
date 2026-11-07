@@ -249,8 +249,8 @@ def test_series_falls_back_to_row_currency_and_cost(conn, journal, acc):
 def test_types_and_drilldown(conn, journal, acc):
     with conn:
         conn.executemany(
-            "INSERT INTO items (market_hash_name, icon_url, auto_type, updated_at) VALUES (?, NULL, ?, '')",
-            [(CASE, catalog.CASES), (AK, catalog.WEAPONS)],
+            "INSERT INTO items (market_hash_name, icon_url, auto_type, rarity, updated_at) VALUES (?, NULL, ?, ?, '')",
+            [(CASE, catalog.CASES, None), (AK, catalog.WEAPONS, "Classified")],
         )
     journal.buy(CASE, acc, RUB, 10, 800, D("2026-09-28"))
     journal.buy(AK, acc, USD, 1, 300, D("2026-09-28"))
@@ -259,6 +259,13 @@ def test_types_and_drilldown(conn, journal, acc):
     assert result["total_usd"] == 4.0
     assert [(t["type"], t["value_usd"], t["share"]) for t in result["types"]] == [
         (catalog.WEAPONS, 3.0, 75.0), (catalog.CASES, 1.0, 25.0)]
+    # у оружия — подкатегории по редкости с цветом площадки Steam; у кейсов подкатегорий нет
+    weapons, cases = result["types"]
+    assert [(s["subtype"], s["color"], s["share"]) for s in weapons["subtypes"]] == [("Засекреченное", "#d32ce6", 100.0)]
+    assert weapons["items"][0]["subtype"] == "Засекреченное" and cases["subtypes"] is None
+    catalog.set_type(conn, AK, catalog.GLOVES)  # перчатки — в категории «Ножи и перчатки»
+    [gloves] = [t for t in stats.types(conn, replay(journal.ops()))["types"] if t["type"] == catalog.KNIVES_GLOVES]
+    assert [s["subtype"] for s in gloves["subtypes"]] == [catalog.GLOVES]
     catalog.set_type(conn, AK, catalog.OTHER)
     assert stats.types(conn, replay(journal.ops()))["types"][0]["type"] == catalog.OTHER
 

@@ -363,6 +363,19 @@ MIGRATIONS: list[str] = [
     WHERE kind = 'sell' AND comment = '' AND target_id IS NOT NULL AND created_at < '2026-11-06T21:07';
     DROP TABLE IF EXISTS position_comments;
     """,
+    # 11: круговая диаграмма — категории и подкатегории. У предмета — редкость (подкатегории агентов
+    # и оружия); «Ножи и перчатки» делятся на ножи и перчатки; сувенирные наборы — отдельный тип;
+    # «Иные наклейки» → «Наклейки иные». Точные типы и редкость придут при обновлении справочника.
+    """
+    ALTER TABLE items ADD COLUMN rarity TEXT;
+    UPDATE items SET auto_type = 'Наклейки иные' WHERE auto_type = 'Иные наклейки';
+    UPDATE items SET type_override = 'Наклейки иные' WHERE type_override = 'Иные наклейки';
+    UPDATE items SET auto_type = CASE WHEN market_hash_name LIKE '%Gloves%' OR market_hash_name LIKE '%Hand Wraps%'
+                                      THEN 'Перчатки' ELSE 'Ножи' END
+    WHERE auto_type = 'Ножи и перчатки';
+    UPDATE items SET type_override = NULL WHERE type_override = 'Ножи и перчатки';
+    UPDATE items SET auto_type = 'Сувенирные наборы' WHERE auto_type = 'Прочее' AND market_hash_name LIKE '%Souvenir%Package%';
+    """,
 ]
 
 

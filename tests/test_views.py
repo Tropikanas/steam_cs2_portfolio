@@ -26,15 +26,30 @@ def snapshot(conn, item, currency, best_buy, when, rate=None):
 def test_classify():
     assert catalog.classify("crates.json", {"type": "Case"}) == catalog.CASES
     assert catalog.classify("crates.json", {"type": "Autograph Capsule"}) == catalog.CAPSULES
-    assert catalog.classify("crates.json", {"type": "Souvenir"}) == catalog.OTHER
+    assert catalog.classify("crates.json", {"type": "Souvenir"}) == catalog.SOUVENIRS
+    assert catalog.classify("crates.json", {"type": "Music Kit Box"}) == catalog.OTHER
     assert catalog.classify("stickers.json", {"tournament": {"name": "Austin 2025"}}) == catalog.TOURNAMENT_STICKERS
     assert catalog.classify("stickers.json", {"crates": [{"name": "Operation Riptide Sticker Collection"}]}) == catalog.OPERATION_STICKERS
     assert catalog.classify("stickers.json", {"crates": [{"name": "Community Sticker Capsule 1"}]}) == catalog.OTHER_STICKERS
-    assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Gloves"}}) == catalog.KNIVES_GLOVES
+    assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Gloves"}}) == catalog.GLOVES
+    assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Knives"}}) == catalog.KNIVES
     assert catalog.classify("skins_not_grouped.json", {"category": {"name": "Rifles"}}) == catalog.WEAPONS
     assert catalog.classify("agents.json", {}) == catalog.AGENTS
     assert catalog.classify("patches.json", {}) == catalog.PATCHES
     assert catalog.classify("keychains.json", {}) == catalog.OTHER
+    [(_, _, kind, rarity)] = catalog.parse("agents.json", [{"name": "Agent X", "rarity": {"name": "Master"}}])
+    assert (kind, rarity) == (catalog.AGENTS, "Master")
+
+
+def test_categories_and_subcategories():
+    assert catalog.category(catalog.OPERATION_STICKERS) == catalog.STICKERS
+    assert catalog.category(catalog.GLOVES) == catalog.KNIVES_GLOVES
+    assert catalog.category(catalog.CASES) == catalog.CASES
+    assert catalog.subcategory(catalog.CASES, None) is None
+    assert catalog.subcategory(catalog.WEAPONS, "Classified")[:2] == ("Засекреченное", "#d32ce6")
+    assert catalog.subcategory(catalog.AGENTS, "Distinguished")[:2] == ("Заслуженный", "#4b69ff")
+    assert catalog.subcategory(catalog.WEAPONS, None)[0] == "Редкость неизвестна"
+    assert catalog.subcategory(catalog.KNIVES, "Covert")[:2] == (catalog.KNIVES, None)
 
 
 def test_search_prefers_prefix(conn):

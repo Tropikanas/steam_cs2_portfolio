@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
-from steamfolio import views
+from steamfolio import catalog, views
 from steamfolio.clock import MSK, msk_date
 from steamfolio.currencies import SYMBOLS, Currency
 from steamfolio.ledger import Holding, Ledger, Op, RowKey, daily_holdings, replay
@@ -235,28 +235,44 @@ def _realized_line(ops: list[Op], moments: list[tuple[int, date]], currency: Cur
 
 
 def types(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1) -> dict[str, Any]:
-    """Текущая стоимость по типам, внутри — по предметам (без разбивки на аккаунты и валюты)."""
+    """Текущая стоимость по категориям, внутри — по подкатегориям (если есть) и предметам
+    (без разбивки на аккаунты и валюты). type у предмета — его тип (его можно поменять вручную)."""
     rows = views.portfolio(conn, ledger, portfolio_id=portfolio_id)["rows"]
-    by_type: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    rarity = {name: row["rarity"] for name, row in views._items(conn, {r["item"] for r in rows}).items()}
+    by_cat: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for r in rows:
         value = r.get("value_usd")
         estimated = value is None
         value = r["cost_usd"] if estimated else value
-        item = by_type[r["type"]].setdefault(r["item"], {"item": r["item"], "icon": r["icon"], "url": r["url"],
-                                                         "quantity": 0, "value_usd": 0.0, "no_price": False})
+        sub = catalog.subcategory(r["type"], rarity.get(r["item"]))
+        item = by_cat[catalog.category(r["type"])].setdefault(r["item"], {
+            "item": r["item"], "icon": r["icon"], "url": r["url"], "type": r["type"],
+            "subtype": sub[0] if sub else None, "subtype_color": sub[1] if sub else None,
+            "subtype_order": sub[2] if sub else 0, "quantity": 0, "value_usd": 0.0, "no_price": False})
         item["quantity"] += r["quantity"]
         item["value_usd"] = round(item["value_usd"] + (value or 0), 2)
         item["no_price"] = item["no_price"] or estimated
-    total = sum(i["value_usd"] for items in by_type.values() for i in items.values())
+    total = sum(i["value_usd"] for items in by_cat.values() for i in items.values())
+    def share(part: float, whole: float) -> float:
+        return round(part / whole * 100, 2) if whole else 0
+
     result = []
-    for kind, items in by_type.items():
+    for kind, items in by_cat.items():
         value = round(sum(i["value_usd"] for i in items.values()), 2)
+        subs: dict[str, dict[str, Any]] = {}
+        for i in items.values():
+            if i["subtype"] is not None:
+                s = subs.setdefault(i["subtype"], {"subtype": i["subtype"], "color": i["subtype_color"],
+                                                   "order": i["subtype_order"], "value_usd": 0.0})
+                s["value_usd"] = round(s["value_usd"] + i["value_usd"], 2)
         result.append({
             "type": kind,
             "value_usd": value,
-            "share": round(value / total * 100, 2) if total else 0,
+            "share": share(value, total),
+            "subtypes": sorted(({**s, "share": share(s["value_usd"], value)} for s in subs.values()),
+                               key=lambda s: -s["value_usd"]) or None,
             "items": sorted(
-                ({**i, "share": round(i["value_usd"] / value * 100, 2) if value else 0} for i in items.values()),
+                ({**i, "share": share(i["value_usd"], value)} for i in items.values()),
                 key=lambda i: -i["value_usd"],
             ),
         })

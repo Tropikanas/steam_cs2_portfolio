@@ -21,16 +21,59 @@ BASE_URL = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/e
 
 CASES = "Кейсы"
 CAPSULES = "Капсулы с наклейками"
+SOUVENIRS = "Сувенирные наборы"
 TOURNAMENT_STICKERS = "Наклейки турниров"
 OPERATION_STICKERS = "Наклейки операций"
-OTHER_STICKERS = "Иные наклейки"
+OTHER_STICKERS = "Наклейки иные"
 PATCHES = "Нашивки"
 AGENTS = "Агенты"
 WEAPONS = "Оружие"
-KNIVES_GLOVES = "Ножи и перчатки"
+KNIVES = "Ножи"
+GLOVES = "Перчатки"
 OTHER = "Прочее"
-TYPES = (CASES, CAPSULES, TOURNAMENT_STICKERS, OPERATION_STICKERS, OTHER_STICKERS, PATCHES, AGENTS, WEAPONS,
-         KNIVES_GLOVES, OTHER)
+# Тип предмета (его можно поменять вручную) — самый мелкий уровень; категория диаграммы выводится из него.
+TYPES = (CASES, CAPSULES, SOUVENIRS, TOURNAMENT_STICKERS, OPERATION_STICKERS, OTHER_STICKERS, PATCHES, AGENTS,
+         WEAPONS, KNIVES, GLOVES, OTHER)
+
+STICKERS = "Наклейки"
+KNIVES_GLOVES = "Ножи и перчатки"
+# Категории круговой диаграммы по порядку; у части — подкатегории (у агентов и оружия — по редкости).
+CATEGORIES = (CASES, CAPSULES, SOUVENIRS, STICKERS, PATCHES, AGENTS, WEAPONS, KNIVES_GLOVES, OTHER)
+PARENT = {TOURNAMENT_STICKERS: STICKERS, OPERATION_STICKERS: STICKERS, OTHER_STICKERS: STICKERS,
+          KNIVES: KNIVES_GLOVES, GLOVES: KNIVES_GLOVES}
+BY_RARITY = (AGENTS, WEAPONS)
+
+# Редкость (как в базе ByMykel, по-английски) → название и цвет на Торговой площадке Steam, от низшей к высшей.
+RARITIES = {
+    "Consumer Grade": ("Ширпотреб", "#b0c3d9"),
+    "Industrial Grade": ("Промышленное качество", "#5e98d9"),
+    "Mil-Spec Grade": ("Армейское качество", "#4b69ff"),
+    "Restricted": ("Запрещённое", "#8847ff"),
+    "Classified": ("Засекреченное", "#d32ce6"),
+    "Covert": ("Тайное", "#eb4b4b"),
+    "Contraband": ("Контрабанда", "#e4ae39"),
+    "Extraordinary": ("Экстраординарного типа", "#eb4b4b"),
+    "Distinguished": ("Заслуженный", "#4b69ff"),
+    "Exceptional": ("Исключительный", "#8847ff"),
+    "Superior": ("Превосходный", "#d32ce6"),
+    "Master": ("Мастер", "#eb4b4b"),
+}
+UNKNOWN_RARITY = ("Редкость неизвестна", "#9ca3af")
+
+
+def category(kind: str) -> str:
+    return PARENT.get(kind, kind)
+
+
+def subcategory(kind: str, rarity: str | None) -> tuple[str, str | None, int] | None:
+    """(подкатегория, цвет редкости или None, порядок) — или None, если у категории подкатегорий нет."""
+    if kind in BY_RARITY:
+        names = list(RARITIES)
+        name, color = RARITIES.get(rarity or "", UNKNOWN_RARITY)
+        return name, color, names.index(rarity) if rarity in RARITIES else len(names)
+    if kind in PARENT:
+        return kind, None, TYPES.index(kind)
+    return None
 
 FILES = ("crates.json", "stickers.json", "skins_not_grouped.json", "agents.json", "patches.json", "keychains.json",
          "graffiti.json", "music_kits.json", "keys.json", "collectibles.json", "highlights.json")
@@ -50,6 +93,8 @@ def classify(file: str, item: dict[str, Any]) -> str:
             return CASES
         if kind in ("Sticker Capsule", "Autograph Capsule"):
             return CAPSULES
+        if kind in ("Souvenir", "Souvenir Highlight"):
+            return SOUVENIRS
         return OTHER
     if file == "stickers.json":
         if item.get("tournament"):
@@ -60,7 +105,7 @@ def classify(file: str, item: dict[str, Any]) -> str:
         return OTHER_STICKERS
     if file == "skins_not_grouped.json":
         category = (item.get("category") or {}).get("name")
-        return KNIVES_GLOVES if category in ("Knives", "Gloves") else WEAPONS
+        return {"Knives": KNIVES, "Gloves": GLOVES}.get(category, WEAPONS)
     if file == "agents.json":
         return AGENTS
     if file == "patches.json":
@@ -68,12 +113,13 @@ def classify(file: str, item: dict[str, Any]) -> str:
     return OTHER
 
 
-def parse(file: str, data: Iterable[dict[str, Any]]) -> Iterator[tuple[str, str | None, str]]:
-    """(market_hash_name, icon_url, тип)."""
+def parse(file: str, data: Iterable[dict[str, Any]]) -> Iterator[tuple[str, str | None, str, str | None]]:
+    """(market_hash_name, icon_url, тип, редкость)."""
     for item in data:
         name = item.get("market_hash_name") or item.get("name")
         if name:
-            yield name, item.get("image"), classify(file, item)
+            rarity = item.get("rarity")
+            yield name, item.get("image"), classify(file, item), rarity.get("name") if isinstance(rarity, dict) else None
 
 
 def is_stale(conn: sqlite3.Connection, max_age_hours: int = 24) -> bool:
@@ -93,10 +139,11 @@ def refresh(conn: sqlite3.Connection, proxy: str | None = None) -> int:
             del response
             with conn:
                 conn.executemany(
-                    """INSERT INTO items (market_hash_name, icon_url, auto_type, updated_at) VALUES (?, ?, ?, ?)
+                    """INSERT INTO items (market_hash_name, icon_url, auto_type, rarity, updated_at) VALUES (?, ?, ?, ?, ?)
                        ON CONFLICT (market_hash_name) DO UPDATE
-                       SET icon_url = excluded.icon_url, auto_type = excluded.auto_type, updated_at = excluded.updated_at""",
-                    [(name, icon, kind, now) for name, icon, kind in rows],
+                       SET icon_url = excluded.icon_url, auto_type = excluded.auto_type, rarity = excluded.rarity,
+                           updated_at = excluded.updated_at""",
+                    [(name, icon, kind, rarity, now) for name, icon, kind, rarity in rows],
                 )
             total += len(rows)
     with conn:

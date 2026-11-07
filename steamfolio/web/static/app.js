@@ -1538,25 +1538,64 @@ const SF = (() => {
       renderLine();
     }
 
-    function colorOf(type) {
-      const i = typeNames.indexOf(type);
-      return PALETTE[(i < 0 ? typeNames.length : i) % PALETTE.length];
+    // Цвета категорий круговой диаграммы и подкатегорий наклеек; у агентов и оружия цвет подкатегории —
+    // цвет редкости на площадке Steam (приходит с сервера), у ножей и перчаток — золото со штриховкой.
+    const CATEGORY_COLORS = {
+      "Кейсы": "#f97316", "Капсулы с наклейками": "#9acd32", "Сувенирные наборы": "#111111", "Наклейки": "#f4a7c3",
+      "Нашивки": "#4fc3f7", "Агенты": "#f28b82", "Оружие": "#8b5cf6", "Ножи и перчатки": "#d4af37", "Прочее": "#9ca3af",
+    };
+    const SUB_COLORS = { "Наклейки турниров": "#fde68a", "Наклейки операций": "#f4a7c3", "Наклейки иные": "#a8e6b8" };
+    const GOLD = "#d4af37";
+    const HATCH = { "Ножи": "\\", "Перчатки": "/" };  // наклон линий: ножи — слева-сверху направо-вниз, перчатки — наоборот
+    const colorOf = (type) => CATEGORY_COLORS[type] || PALETTE[PALETTE.length - 1];
+    // Штриховка для диаграммы (узор canvas) и для квадратика в таблице (CSS).
+    function hatchPattern(dir) {
+      const c = document.createElement("canvas");
+      c.width = c.height = 10;
+      const g = c.getContext("2d");
+      g.fillStyle = GOLD;
+      g.fillRect(0, 0, 10, 10);
+      g.strokeStyle = "rgba(90, 64, 0, .75)";
+      g.lineWidth = 1.6;
+      g.beginPath();
+      for (const k of [-10, 0, 10]) {
+        if (dir === "\\") { g.moveTo(k, 0); g.lineTo(k + 10, 10); } else { g.moveTo(k + 10, 0); g.lineTo(k, 10); }
+      }
+      g.stroke();
+      return g.createPattern(c, "repeat");
+    }
+    const hatchCss = (dir) => `repeating-linear-gradient(${dir === "\\" ? 45 : -45}deg, ${GOLD} 0 4px, rgba(90, 64, 0, .75) 4px 5.6px)`;
+    // Цвет подкатегории: {chart — для диаграммы, css — для квадратика}.
+    function subColor(s) {
+      if (HATCH[s.subtype]) return { chart: hatchPattern(HATCH[s.subtype]), css: hatchCss(HATCH[s.subtype]) };
+      const c = s.color || SUB_COLORS[s.subtype] || PALETTE[PALETTE.length - 1];
+      return { chart: c, css: c };
     }
 
+    // Уровни: категории → подкатегории (у наклеек, агентов, оружия, ножей и перчаток; предметы — в таблице)
+    // или сразу предметы (у категорий без подкатегорий).
     function renderPie() {
       const types = data.types.types;
       const level = drill ? types.find((t) => t.type === drill) : null;
       if (drill && !level) drill = null;
-      const slices = level ? level.items : types;
+      const subs = level && level.subtypes;
+      const slices = subs || (level ? level.items : types);
       const base = level ? colorOf(level.type) : null;
-      const colors = slices.map((s, i) => level ? alpha(base, Math.max(0.25, 1 - i * (0.75 / Math.max(slices.length, 1)))) : colorOf(s.type));
+      const shades = slices.map((s, i) => subs ? subColor(s)
+        : level ? { chart: alpha(base, Math.max(0.25, 1 - i * (0.75 / Math.max(slices.length, 1)))) }
+        : { chart: colorOf(s.type) });
+      const colors = shades.map((c) => c.chart);
+      const subCss = subs ? Object.fromEntries(subs.map((s, i) => [s.subtype, shades[i].css])) : {};
       el("pie-title").textContent = level ? `${level.type}: ${money(level.value_usd, "USD")}` : `По типам предметов: ${money(data.types.total_usd, "USD")}`;
       el("pie-back").classList.toggle("hidden", !level);
+      const surface = css("--surface");
       const config = {
         type: "doughnut",
         data: {
-          labels: slices.map((s) => level ? s.item : s.type),
-          datasets: [{ data: slices.map((s) => s.value_usd), backgroundColor: colors, borderColor: css("--surface"), borderWidth: 2 }],
+          labels: slices.map((s) => subs ? s.subtype : level ? s.item : s.type),
+          // Чёрный сектор (сувенирные наборы) на тёмном фоне — со светлой каймой.
+          datasets: [{ data: slices.map((s) => s.value_usd), backgroundColor: colors,
+            borderColor: colors.map((c) => c === "#111111" ? "#6b7280" : surface), borderWidth: 2 }],
         },
         options: {
           maintainAspectRatio: false, animation: { duration: 250 }, cutout: "55%",
@@ -1571,12 +1610,18 @@ const SF = (() => {
       if (pieChart) pieChart.destroy();
       pieChart = slices.length ? new Chart(el("pie"), config) : null;
       const sw = (c) => `<span class="swatch" style="background:${c}"></span>`;
+      // В таблице внутри категории — её предметы; при подкатегориях у предмета квадратик и название подкатегории.
+      const rows = level ? level.items : slices;
+      // Предметы — группами по подкатегориям в порядке секторов, внутри — по стоимости.
+      const subIndex = (s) => subs.findIndex((x) => x.subtype === s.subtype);
+      if (subs) rows.sort((a, b) => subIndex(a) - subIndex(b) || b.value_usd - a.value_usd);
       el("pie-table").innerHTML = !slices.length ? '<div class="empty-state">Портфель пуст</div>'
-        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th>${level ? "<th>Тип</th>" : ""}</tr></thead><tbody>
-        ${slices.map((s, i) => level
-          ? `<tr><td class="name">${sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
+        : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${subs ? "<th>Подкатегория</th>" : ""}${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th>${level ? "<th>Тип</th>" : ""}</tr></thead><tbody>
+        ${rows.map((s, i) => level
+          ? `<tr><td class="name">${subs ? "" : sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
+              ${subs ? `<td>${sw(subCss[s.subtype])}${esc(s.subtype)}</td>` : ""}
               <td class="num">${num(s.quantity, 0)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td>
-              <td><select data-item="${esc(s.item)}" aria-label="Тип предмета">${typeNames.map((t) => `<option ${t === level.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></td></tr>`
+              <td><select data-item="${esc(s.item)}" aria-label="Тип предмета">${typeNames.map((t) => `<option ${t === s.type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></td></tr>`
           : `<tr class="clickable" data-type="${esc(s.type)}"><td>${sw(colors[i])}${esc(s.type)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`).join("")}
         </tbody></table>`;
       el("pie-table").querySelectorAll("tr[data-type]").forEach((tr) => tr.onclick = () => { drill = tr.dataset.type; renderPie(); });

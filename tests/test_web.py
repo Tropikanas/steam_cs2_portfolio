@@ -124,6 +124,14 @@ def test_edit_sale_in_closed_positions(client):
     assert client.post(f"/api/ops/{sale}/edit", json={"quantity": 2}).status_code == 200
     assert rows_of(client)[0]["quantity"] == 8
     assert client.get("/api/stats").json()["summary"]["total_sold_usd"] == 0.5  # 2 × 20 ₽ по курсу 80
+    # плитка «Реализованная прибыль» в «Закрытых позициях» — та же цифра, что в Статистике
+    closed_summary = client.get("/api/portfolio?closed=true").json()["summary"]
+    assert closed_summary["total_profit_usd"] == client.get("/api/stats").json()["summary"]["total_profit_usd"] == 0.25
+    # у строки с продажами — признак, чтобы сайт переспросил перед правкой покупки
+    assert rows_of(client)[0]["has_sales"] is True
+    other = client.post("/api/buy", json={"item": "Kilowatt Case", "account_id": acc, "currency": "RUB",
+                                          "quantity": 1, "price": "10"}).json()["op_id"]
+    assert next(r for r in rows_of(client) if r["lot_id"] == other)["has_sales"] is False
 
 
 def test_sale_has_its_own_comment(client):

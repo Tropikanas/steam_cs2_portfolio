@@ -184,6 +184,10 @@ tr.filters input { width: 100%; min-width: 50px; padding: 3px 6px; font-size: 12
 .multi-list .toggle { justify-content: flex-start; }
 .multi-list input { width: auto; min-width: 0; }
 .multi-list [data-reset] { align-self: flex-start; font-size: 12px; }
+.date-filter select { width: 100%; }
+.date-filter label { display: flex; flex-direction: column; gap: 2px; }
+.date-filter label > span:not(.date-field) { font-size: 12px; color: var(--muted); }
+.date-filter .date-field > input[type="text"] { width: 100%; }
 tbody tr:hover td { background: var(--surface-2); }
 tbody tr:last-child td { border-bottom: 0; }
 td.icon { width: 44px; padding: 3px 4px 3px 8px; }

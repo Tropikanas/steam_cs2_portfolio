@@ -112,6 +112,7 @@ def portfolio(
     rates = latest_rates(conn)
     account_names = {a["id"]: a["name"] for a in accounts(conn, portfolio_id)}
     positions = ledger.open_positions
+    sold_lots = {s.key.lot for s in ledger.sales}
     if collapse:
         groups: dict[tuple, list[Position]] = {}
         for p in positions:
@@ -163,6 +164,8 @@ def portfolio(
         lot = lots.get(first.key.lot) if not collapse else None
         row["single_op"] = _buy_info(lot, account_names) if lot else None
         row["bought"] = first.bought if not collapse else None
+        # Есть ли у строки продажи («Закрытые позиции») — перед правкой покупки сайт переспросит.
+        row["has_sales"] = not collapse and first.key.lot in sold_lots
         if quantity:
             invested += cost_usd
             price_usd, _ = prices.latest(name, Currency.USD)
@@ -256,7 +259,8 @@ def sales(conn: sqlite3.Connection, ledger: Ledger, portfolio_id: int = 1, ops: 
             "comment": comment,
         })
     rows.sort(key=lambda r: (r["sale_date"], r["op_id"]), reverse=True)
-    return {"rows": rows, "summary": None, "last_update": last_update(conn)}
+    # Та же «Реализованная прибыль/убыток», что на «Статистике».
+    return {"rows": rows, "summary": {"total_profit_usd": _units(ledger.profit_usd)}, "last_update": last_update(conn)}
 
 
 def orders(conn: sqlite3.Connection, open_orders: list[Order], portfolio_id: int = 1) -> dict[str, Any]:

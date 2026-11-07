@@ -227,6 +227,9 @@ const SF = (() => {
     + statTile("Текущая стоимость", money(s.value_usd, "USD"), { tip: TIPS.value })
     + statTile(s.profit_usd < 0 ? "Нереализованный убыток" : "Нереализованная прибыль", signedUsd(s.profit_usd),
       { tip: TIPS.unrealized, extra: s.unpriced ? `<div class="small muted">${unpricedNote(s.unpriced)}</div>` : "" });
+  // Реализованная прибыль/убыток: одна и та же плитка в Статистике и в «Закрытых позициях».
+  const realizedTile = (s) => statTile(s.total_profit_usd < 0 ? "Реализованный убыток" : "Реализованная прибыль",
+    signedUsd(s.total_profit_usd), { tip: TIPS.totalProfit });
   const pct = (v) => v == null ? '<span class="muted">—</span>'
     : `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${num(v, 1)}%</span>`;
   const date = (iso) => iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "—";
@@ -275,8 +278,17 @@ const SF = (() => {
 
   // Фильтр числовой колонки: «>10», «<5», «10..20», «=3»; иначе — поиск подстроки.
   // Фильтр-список (filter: "list"): выбранные значения; строка подходит, если у неё есть хотя бы одно из них.
+  // Фильтр даты (filter: "date"): {mode: "eq" | "range" | "from" | "to", from, to} — даты ГГГГ-ММ-ДД, границы включаются.
   function matches(filter, col, row) {
     if (Array.isArray(filter)) return !filter.length || col.values(row).some((v) => filter.includes(v));
+    if (filter && typeof filter === "object") {
+      if (!dateFilterSet(filter)) return true;
+      const d = (row[col.key] || "").slice(0, 10);
+      if (!d) return false;
+      const { mode, from, to } = filter;
+      if (mode === "eq") return d === from;
+      return (!from || mode === "to" || d >= from) && (!to || mode === "from" || d <= to);
+    }
     const f = filter.trim();
     if (!f) return true;
     const value = col.value ? col.value(row) : row[col.key];
@@ -295,8 +307,14 @@ const SF = (() => {
     return text.includes(f.toLowerCase());
   }
 
-  const filterSet = (v) => Array.isArray(v) ? v.length > 0 : !!(v || "").trim();
-  const filterText = (v) => Array.isArray(v) ? v.join(", ") : (v || "").trim();
+  const dateFilterSet = (f) => !!(f && (f.mode === "to" ? f.to : f.mode === "range" ? f.from || f.to : f.from));
+  const dateFilterLabel = (f) => {
+    if (!dateFilterSet(f)) return "Все";
+    const d = (iso) => iso ? date(iso) : "…";
+    return { eq: d(f.from), from: "от " + d(f.from), to: "до " + d(f.to), range: !f.to ? "с " + d(f.from) : !f.from ? "по " + d(f.to) : `${d(f.from)} – ${d(f.to)}` }[f.mode];
+  };
+  const filterSet = (v) => Array.isArray(v) ? v.length > 0 : v && typeof v === "object" ? dateFilterSet(v) : !!(v || "").trim();
+  const filterText = (v) => Array.isArray(v) ? v.join(", ") : v && typeof v === "object" ? dateFilterLabel(v) : (v || "").trim();
   const listLabel = (v) => !v || !v.length ? "Все" : v.length === 1 ? v[0] : `Выбрано: ${v.length}`;
 
   // Выпадающий список с галочками для фильтра колонки; открыт может быть только один.
@@ -340,11 +358,66 @@ const SF = (() => {
         list.onchange();
       };
       // Таблица прокручивается по горизонтали — список позиционируется относительно окна, чтобы не обрезался.
-      const r = btn.getBoundingClientRect();
-      list.style.top = `${r.bottom + 2}px`;
-      list.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 228))}px`;
-      document.body.append(list);
-      openList = list;
+      showList(list, btn);
+    };
+    sync();
+    return sync;
+  }
+
+  // Открыть выпадающую панель фильтра под кнопкой (в <body>, позиция — относительно окна).
+  function showList(list, btn) {
+    const r = btn.getBoundingClientRect();
+    list.style.top = `${r.bottom + 2}px`;
+    list.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 228))}px`;
+    document.body.append(list);
+    openList = list;
+  }
+
+  // Фильтр даты: конкретная дата, период, «от» или «до».
+  const DATE_MODES = [["eq", "Дата"], ["range", "Период"], ["from", "От"], ["to", "До"]];
+  function bindDateFilter(wrap, col, filters, render) {
+    const btn = wrap.querySelector("button");
+    const list = document.createElement("div");
+    list.className = "multi-list date-filter";
+    list.owner = btn;
+    const sync = () => {
+      btn.textContent = dateFilterLabel(filters[col.id]) + " ▾";
+      btn.title = filterSet(filters[col.id]) ? filterText(filters[col.id]) : "";
+      btn.classList.toggle("set", filterSet(filters[col.id]));
+    };
+    btn.onclick = () => {
+      if (openList === list) { closeList(); return; }
+      if (openList) closeList();
+      const f = filters[col.id] || { mode: "eq", from: "", to: "" };
+      list.innerHTML = `<select data-mode aria-label="Что выбрать">${DATE_MODES.map(([v, t]) =>
+        `<option value="${v}" ${v === f.mode ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <label data-from><span></span><input type="date" value="${esc(f.from || "")}"></label>
+        <label data-to><span></span><input type="date" value="${esc(f.to || "")}"></label>
+        <button type="button" class="link small" data-reset>Сбросить</button>`;
+      const mode = list.querySelector("[data-mode]");
+      const [fromIn, toIn] = ["[data-from] input", "[data-to] input"].map((s) => list.querySelector(s));
+      const layout = () => {
+        const m = mode.value;
+        list.querySelector("[data-from]").classList.toggle("hidden", m === "to");
+        list.querySelector("[data-to]").classList.toggle("hidden", m === "eq" || m === "from");
+        list.querySelector("[data-from] > span").textContent = { eq: "Дата", range: "С", from: "От" }[m] || "";
+        list.querySelector("[data-to] > span").textContent = m === "range" ? "По" : "До";
+      };
+      const apply = () => {
+        const v = { mode: mode.value, from: fromIn.value, to: toIn.value };
+        if (dateFilterSet(v)) filters[col.id] = v; else delete filters[col.id];
+        sync();
+        render();
+      };
+      mode.onchange = () => { layout(); apply(); };
+      [fromIn, toIn].forEach((i) => i.addEventListener("input", apply));
+      list.querySelector("[data-reset]").onclick = () => {
+        fromIn.value = toIn.value = "";
+        apply();
+      };
+      layout();
+      showList(list, btn);
+      enhanceDatesIn(list);
     };
     sync();
     return sync;
@@ -388,7 +461,7 @@ const SF = (() => {
       <tr>${columns.map((c) => `<th class="${(c.cls || "").replace(/\b(num|icon|name|actions|comment)\b/g, "")} ${c.sortable !== false ? "sortable" : ""} ${c.numeric ? "num" : ""}"
         ${c.sortable !== false ? `data-id="${c.id}"` : ""}>${esc(c.title)}<span class="arrow"></span></th>`).join("")}</tr>
       <tr class="filters">${columns.map((c) => `<th class="${(c.cls || "").replace(/\b(num|icon|name|actions|comment)\b/g, "")}">${
-        c.filter === "list" ? `<div class="multi" data-list="${c.id}"><button type="button" aria-label="Фильтр: ${esc(c.title)}"></button></div>`
+        c.filter === "list" || c.filter === "date" ? `<div class="multi" data-${c.filter}="${c.id}"><button type="button" aria-label="Фильтр: ${esc(c.title)}"></button></div>`
         : c.filter ? `<input data-id="${c.id}" placeholder="${c.numeric ? "&gt;0" : "фильтр"}" aria-label="Фильтр: ${esc(c.title)}">` : ""}</th>`).join("")}</tr>
       </thead><tbody></tbody></table>`;
     container.querySelectorAll("th[data-id]").forEach((th) => th.addEventListener("click", () => {
@@ -404,8 +477,9 @@ const SF = (() => {
         render();
       });
     });
-    const syncLists = [...container.querySelectorAll("tr.filters .multi")].map((wrap) =>
-      bindListFilter(wrap, columns.find((c) => c.id === wrap.dataset.list), filters, render));
+    const syncLists = [...container.querySelectorAll("tr.filters .multi")].map((wrap) => wrap.dataset.date
+      ? bindDateFilter(wrap, columns.find((c) => c.id === wrap.dataset.date), filters, render)
+      : bindListFilter(wrap, columns.find((c) => c.id === wrap.dataset.list), filters, render));
     return {
       setRows(r) { rows = r; render(); },
       render,
@@ -664,7 +738,7 @@ const SF = (() => {
       document.getElementById("btn-buy").classList.toggle("hidden", closed.checked);
       document.getElementById("collapse-toggle").classList.toggle("hidden", closed.checked);
       document.getElementById("edit-hint").textContent = closed.checked
-        ? "Строка — одна продажа. Двойной щелчок по количеству, цене или дате продажи — изменить продажу; портфель и статистика пересчитаются. Комментарий — щелчок."
+        ? "Строка — одна продажа. Двойной щелчок по количеству, цене или дате продажи — изменить продажу; портфель и статистика пересчитаются."
         : "Строка — одна покупка. Двойной щелчок по количеству, цене, дате покупки, валюте или аккаунту — изменить покупку.";
       reload();
     }
@@ -685,8 +759,8 @@ const SF = (() => {
         html: (r) => `<span title="в USD по курсу на дату покупки: ${money(r.avg_price_usd, "USD", true)}">${money(r.avg_price, r.currency, true)}</span>` },
       { id: "sale_price", title: "Цена продажи", key: "sale_price", cls: "num", numeric: true, filter: true,
         html: (r) => money(r.sale_price, r.currency), bind: (td, r) => bindSaleEdit(td, r, "price") },
-      { id: "first", title: "Дата покупки", key: "first_buy_date", filter: true, text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
-      { id: "sale_date", title: "Дата продажи", key: "sale_date", filter: true, text: (r) => date(r.sale_date), html: (r) => date(r.sale_date),
+      { id: "first", title: "Дата покупки", key: "first_buy_date", filter: "date", text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date) },
+      { id: "sale_date", title: "Дата продажи", key: "sale_date", filter: "date", text: (r) => date(r.sale_date), html: (r) => date(r.sale_date),
         bind: (td, r) => bindSaleEdit(td, r, "date") },
       { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency },
       { id: "profit", title: "Прибыль", key: "profit", cls: "num", numeric: true, filter: true,
@@ -717,7 +791,7 @@ const SF = (() => {
       { id: "avg", title: collapse.checked ? "Средняя цена" : "Цена покупки", key: "avg_price", cls: "num", numeric: true, filter: true,
         html: (r) => `<span title="${r.avg_price_usd != null ? "в USD по курсу на дату покупки: " + money(r.avg_price_usd, "USD", true) : ""}">${money(r.avg_price, r.currency, true)}</span>`,
         bind: (td, r) => bindEdit(td, r, "price") },
-      { id: "first", title: collapse.checked ? "Первая покупка" : "Дата покупки", key: "first_buy_date", filter: true,
+      { id: "first", title: collapse.checked ? "Первая покупка" : "Дата покупки", key: "first_buy_date", filter: "date",
         text: (r) => date(r.first_buy_date), html: (r) => date(r.first_buy_date), bind: (td, r) => bindEdit(td, r, "date") },
       { id: "currency", title: "Валюта", key: "currency", filter: true, html: (r) => r.currency,
         bind: (td, r) => bindEdit(td, r, "currency") },
@@ -764,10 +838,23 @@ const SF = (() => {
         editInCell(td, {
           values: { quantity: r.quantity, price: b.price, date: b.date, currency: b.currency, account_id: b.account_id },
           accounts: accountChoices(b),
-          save: (changes) => saveEdit(b.op_id, "quantity" in changes ? { ...changes, quantity: changes.quantity + sold } : changes,
-            "Покупка изменена"),
+          save: async (changes) => {
+            if (r.has_sales && !(await confirmSoldEdit(r, field))) { table.render(); return; }
+            await saveEdit(b.op_id, "quantity" in changes ? { ...changes, quantity: changes.quantity + sold } : changes,
+              "Покупка изменена");
+          },
         }, field);
       };
+    }
+
+    // Из строки уже продавали: правка количества, цены или даты покупки меняет и «Закрытые позиции» — переспросим.
+    function confirmSoldEdit(r, field) {
+      const head = `По данной позиции с ID ${r.position_no} уже есть продажи на вкладке «Закрытые позиции». `;
+      const what = { price: "Цена покупки", date: "Дата покупки" }[field];
+      if (field !== "quantity" && !what) return Promise.resolve(true);
+      return confirmDialog("Позиция уже частично продана", field === "quantity"
+        ? head + "Вы уверены, что с учётом проданного общее количество будет верным?"
+        : head + `Если продолжить, ${what} на вкладке «Закрытые позиции» пересчитается, продолжаем?`, "Да");
     }
 
     // Продажа в «Закрытых позициях»: количество, цена и дата продажи. Портфель и статистика пересчитываются.
@@ -868,7 +955,7 @@ const SF = (() => {
     async function reload() {
       const data = await api("GET", `/api/portfolio?collapse=${collapse.checked}&closed=${closed.checked}`);
       const s = data.summary;
-      document.getElementById("summary").innerHTML = closed.checked ? ""
+      document.getElementById("summary").innerHTML = closed.checked ? realizedTile(s)
         : holdingTiles(s, (n) => `без цены: ${n} — учтены по себестоимости`);
       // Продажи всегда построчно — «Объединить строки» к ним не относится.
       collapse.disabled = closed.checked;
@@ -1327,7 +1414,7 @@ const SF = (() => {
       el("summary-now").innerHTML = holdingTiles(s, (n) => `без цены: ${n}`);
       el("summary-all").innerHTML = statTile("Всего вложено", money(s.total_invested_usd, "USD"), { tip: TIPS.totalInvested })
         + statTile("Всего продано", money(s.total_sold_usd, "USD"), { tip: TIPS.totalSold })
-        + statTile(s.total_profit_usd < 0 ? "Реализованный убыток" : "Реализованная прибыль", signed(s.total_profit_usd), { tip: TIPS.totalProfit });
+        + realizedTile(s);
     }
 
     function renderLine() {

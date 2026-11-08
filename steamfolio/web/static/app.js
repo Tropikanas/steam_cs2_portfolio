@@ -1568,7 +1568,8 @@ const SF = (() => {
     const hatchCss = ({ dir, color }) => `repeating-linear-gradient(${dir === "\\" ? 45 : -45}deg, ${color} 0 4px, rgba(90, 64, 0, .75) 4px 5.6px)`;
     // Цвет подкатегории: {chart — для диаграммы, css — для квадратика}.
     function subColor(s) {
-      if (HATCH[s.subtype]) return { chart: hatchPattern(HATCH[s.subtype]), css: hatchCss(HATCH[s.subtype]) };
+      const h = HATCH[s.subtype];
+      if (h) return { chart: hatchPattern(h), css: hatchCss(h), faded: hatchPattern({ ...h, color: alpha(h.color, 0.25) }) };
       const c = s.color || SUB_COLORS[s.subtype] || PALETTE[PALETTE.length - 1];
       return { chart: c, css: c };
     }
@@ -1595,8 +1596,10 @@ const SF = (() => {
         data: {
           labels: slices.map((s) => subs ? s.subtype : level ? s.item : s.type),
           // Чёрный сектор (сувенирные наборы) на тёмном фоне — со светлой каймой.
-          datasets: [{ data: slices.map((s) => s.value_usd), backgroundColor: colors,
-            borderColor: colors.map((c) => c === "#111111" ? "#6b7280" : surface), borderWidth: 2 }],
+          // Сектор под курсором (или строки таблицы под курсором) выдвигается, но цвет не меняет.
+          datasets: [{ data: slices.map((s) => s.value_usd), backgroundColor: colors, hoverBackgroundColor: colors,
+            borderColor: colors.map((c) => c === "#111111" ? "#6b7280" : surface), hoverBorderColor: colors.map((c) => c === "#111111" ? "#6b7280" : surface),
+            borderWidth: 2, hoverOffset: 8 }],
         },
         options: {
           maintainAspectRatio: false, animation: { duration: 250 }, cutout: "55%",
@@ -1619,12 +1622,27 @@ const SF = (() => {
       el("pie-table").innerHTML = !slices.length ? '<div class="empty-state">Портфель пуст</div>'
         : `<table><thead><tr><th>${level ? "Предмет" : "Тип"}</th>${subs ? "<th>Подкатегория</th>" : ""}${level ? '<th class="num">Кол-во</th>' : ""}<th class="num">Стоимость</th><th class="num">Доля</th></tr></thead><tbody>
         ${rows.map((s, i) => level
-          ? `<tr><td class="name">${subs ? "" : sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
+          ? `<tr data-slice="${subs ? subIndex(s) : i}"><td class="name">${subs ? "" : sw(colors[i])}<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.item)}</a>${s.no_price ? '<span class="note">без цены — по себестоимости</span>' : ""}</td>
               ${subs ? `<td>${sw(subCss[s.subtype])}${esc(s.subtype)}</td>` : ""}
               <td class="num">${num(s.quantity, 0)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`
-          : `<tr class="clickable" data-type="${esc(s.type)}"><td>${sw(colors[i])}${esc(s.type)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`).join("")}
+          : `<tr class="clickable" data-type="${esc(s.type)}" data-slice="${i}"><td>${sw(colors[i])}${esc(s.type)}</td><td class="num">${money(s.value_usd, "USD")}</td><td class="num">${num(s.share, 1)}%</td></tr>`).join("")}
         </tbody></table>`;
       el("pie-table").querySelectorAll("tr[data-type]").forEach((tr) => tr.onclick = () => { drill = tr.dataset.type; renderPie(); });
+      // Наведение на строку таблицы: её сектор выдвигается, остальные бледнеют (у предмета в категории
+      // с подкатегориями — сектор его подкатегории).
+      const fade = (c) => typeof c !== "string" ? c
+        : c.startsWith("#") ? alpha(c, 0.25) : c.replace(/[\d.]+\)$/, (a) => `${(parseFloat(a) * 0.3).toFixed(3)})`);
+      const highlight = (k) => {
+        if (!pieChart) return;
+        const ds = pieChart.data.datasets[0];
+        ds.backgroundColor = k == null ? colors : colors.map((c, i) => i === k ? c : shades[i].faded || fade(c));
+        pieChart.setActiveElements(k == null ? [] : [{ datasetIndex: 0, index: k }]);
+        pieChart.update();
+      };
+      el("pie-table").querySelectorAll("tr[data-slice]").forEach((tr) => {
+        tr.onmouseenter = () => highlight(+tr.dataset.slice);
+        tr.onmouseleave = () => highlight(null);
+      });
     }
 
     function renderBest() {

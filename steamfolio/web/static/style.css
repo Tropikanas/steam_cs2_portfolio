@@ -264,6 +264,7 @@ tr.flash td { animation: flash 2s ease-out; }
 .chart-box { position: relative; height: 320px; }
 .pie-grid { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 16px; align-items: start; }
 .pie-box { position: relative; height: 300px; }
+.pie-box .pie-back { position: absolute; top: 0; right: 0; padding: 5px; z-index: 1; }
 .pie-grid .table-wrap { box-shadow: none; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px;
   box-shadow: inset 0 0 0 1px rgba(127, 127, 127, .45); }

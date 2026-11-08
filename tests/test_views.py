@@ -46,6 +46,8 @@ def test_classify():
     assert catalog.classify("keychains.json", {}) == catalog.OTHER
     [(_, _, kind, rarity)] = catalog.parse("agents.json", [{"name": "Agent X", "rarity": {"name": "Master"}}])
     assert (kind, rarity) == (catalog.AGENTS, "Master")
+    # наградные наклейки, которых нет на площадке, в справочник не попадают
+    assert list(catalog.parse("stickers.json", [{"name": "Sticker | Mirage (Gold)"}])) == []
 
 
 def test_categories_and_subcategories():

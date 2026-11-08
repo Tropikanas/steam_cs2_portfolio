@@ -127,11 +127,21 @@ def classify(file: str, item: dict[str, Any]) -> str:
     return OTHER
 
 
+# Есть в базе ByMykel, но не продаются на Торговой площадке (наградные; проверено поиском площадки 08.11.2026) —
+# в справочник не попадают, чтобы не появляться в подсказках.
+NOT_ON_MARKET = {
+    "Sticker | Ancient (Gold)", "Sticker | Anubis (Gold)", "Sticker | Dust II (Gold)", "Sticker | Inferno (Gold)",
+    "Sticker | Mirage (Gold)", "Sticker | Nuke (Gold)", "Sticker | Overpass (Gold)", "Sticker | Train (Gold)",
+    "Sticker | Vertigo (Gold)", "Sticker | All-Stars Blue (Holo)", "Sticker | All-Stars Orange (Holo)",
+    "Sticker | Blacksite (Foil)",
+}
+
+
 def parse(file: str, data: Iterable[dict[str, Any]]) -> Iterator[tuple[str, str | None, str, str | None]]:
     """(market_hash_name, icon_url, тип, редкость)."""
     for item in data:
         name = item.get("market_hash_name") or item.get("name")
-        if name:
+        if name and name not in NOT_ON_MARKET:
             rarity = item.get("rarity")
             yield name, item.get("image"), classify(file, item), rarity.get("name") if isinstance(rarity, dict) else None
 
@@ -167,6 +177,14 @@ def refresh(conn: sqlite3.Connection, proxy: str | None = None) -> int:
                SELECT market_hash_name, NULL, ?, ? FROM item_nameids WHERE true
                ON CONFLICT (market_hash_name) DO NOTHING""",
             (OTHER, now),
+        )
+        # Попавшие раньше предметы не с площадки убираем, если по ним нет записей и ордеров.
+        marks = ",".join("?" * len(NOT_ON_MARKET))
+        conn.execute(
+            f"""DELETE FROM items WHERE market_hash_name IN ({marks})
+                AND market_hash_name NOT IN (SELECT market_hash_name FROM operations)
+                AND market_hash_name NOT IN (SELECT market_hash_name FROM orders)""",
+            tuple(NOT_ON_MARKET),
         )
     log.info("Справочник предметов обновлён: %d из базы CS2", total)
     return total

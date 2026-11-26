@@ -1464,7 +1464,7 @@ const SF = (() => {
           { backgroundColor: alpha(PROFIT, 0.25), isProfit: true }),
         ds("Текущая оценка портфеля", s.value, VALUE, { fill: onProfit }, true),
         ds("Оценка по истории продаж Steam", s.value_estimate, VALUE, { fill: onProfit, borderDash: [5, 4], backgroundColor: alpha(VALUE, 0.08) }, true),
-        ds("Вложено", s.invested, INVESTED, { fill: false, borderWidth: 2.5 }),
+        ds("Вложено в текущие позиции", s.invested, INVESTED, { fill: false, borderWidth: 2.5 }),
       ].filter((d) => d.data.length);
       const fmtDay = (ms) => new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "2-digit" });
       // Окно: [конец − ширина, конец]. Ширина — выбранный период или участок, выделенный двумя щелчками.
@@ -1523,12 +1523,12 @@ const SF = (() => {
       if (nav) moveWindow(end);
       const scope = chartCurrency === "TOTAL"
         ? "Отражены все позиции. Текущая оценка портфеля взята по лучшему ордеру на покупку на ТП Steam (в USD). "
-          + "«Вложено» и «Реализованная прибыль/убыток» берутся с графиков конкретных валют посредством пересчёта этих валют в USD по курсу на конкретные даты."
+          + "«Вложено в текущие позиции» и «Реализованная прибыль/убыток» берутся с графиков конкретных валют посредством пересчёта этих валют в USD по курсу на конкретные даты."
         : `Отражены только позиции с валютой ${cur}. Текущая оценка портфеля взята по лучшему ордеру на покупку на ТП Steam (в валюте ${cur}).`;
       el("line-note").textContent = !datasets.length
         ? (chartCurrency === "TOTAL" ? "Данных пока нет — внесите покупки на вкладке «Портфолио»." : `Позиций в ${cur} нет.`)
         : scope + "\nРеализованная прибыль/убыток + Текущая оценка портфеля дают общую оценку портфеля на текущий момент, "
-          + "которая может быть больше или меньше суммы вложенных средств (линия «Вложено»).";
+          + "которая может быть больше или меньше суммы вложенных средств (линия «Вложено в текущие позиции»).";
     }
 
     async function loadSeries() {
